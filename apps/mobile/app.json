@@ -1,0 +1,39 @@
+{
+  "expo": {
+    "name": "Moverix",
+    "slug": "moverix",
+    "version": "1.0.0",
+    "scheme": "moverix",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#1B2535"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.moverix.app"
+    },
+    "android": {
+      "package": "com.moverix.app",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#1B2535"
+      },
+      "googleServicesFile": "./google-services.json"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-font",
+      ["expo-notifications", { "color": "#16A34A" }]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "eas": { "projectId": "moverix-app" }
+    }
+  }
+}
