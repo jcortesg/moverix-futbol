@@ -1,37 +1,20 @@
-# Moverix — Comunidad de Fútbol Amateur
+# Moverix Futbol
 
-## Descripción del Proyecto
-Plataforma para la gestión de comunidades de fútbol amateur: torneos, equipos, partidos, grupos/llaves, tablas de posiciones y pagos. Se compone de dos aplicaciones:
-1. **Admin (Backoffice)** — web app para organizadores
-2. **App móvil** — para jugadores y delegados (fase 2)
+Monorepo pnpm 9 + Turbo 2. Gestión de torneos amateur.
 
-## Stack Tecnológico (definir con el usuario)
-- Frontend Admin: Next.js 14 (App Router) + TypeScript + Tailwind CSS
-- Backend: por definir (Supabase / NestJS / Firebase)
-- Base de datos: PostgreSQL (via Supabase) o similar
+## Stack
+- **API**: NestJS 10 + Drizzle ORM + PostgreSQL + Firebase Admin — port 3001, prefix `/ftb/v1`
+- **Admin**: Next.js 14 (App Router) + Tailwind 3 + Firebase Auth — port 3000
+- **Mobile**: Expo 54 + React 19 + expo-router 6 + Firebase Auth + Zustand + React Query
 
-## Estructura del Proyecto
+## Mobile design tokens
+- Dark UI: `#050B10` base, `#0F1F2B` card
+- Verde: `#7BFF00` primary, glow `#7BFF00AA`
+- Font: Rajdhani (700 heading, 500 body)
+- Auth: `getAuth_safe()` via `lib/useAuth.ts` (lazy init, evita crash RN registration)
+
+## Comandos
+```bash
+pnpm dev                    # admin + api
+cd apps/mobile && pnpm dev  # expo start
 ```
-moverix-admin/   → Next.js backoffice
-moverix-app/     → App móvil (fase 2)
-moverix-api/     → Backend API (si aplica)
-```
-
-## Módulos del Admin
-1. Dashboard
-2. Equipos
-3. Partidos (fixture)
-4. Grupos y Llaves (bracket)
-5. Tabla y Reclasificación
-6. Pagos
-7. Torneos y Ligas
-8. Reportes
-9. Configuración
-
-## Diseño
-- Sidebar oscuro (#1B2535 aprox) con texto blanco
-- Contenido principal blanco
-- Verde primario para acciones y estados positivos
-- Naranja/ámbar para pendientes/parcial
-- Rojo para crítico/sin pago
-- Tipografía: Inter (o similar sans-serif)

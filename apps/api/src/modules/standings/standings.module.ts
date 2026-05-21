@@ -1,4 +1,10 @@
 import { Module } from '@nestjs/common'
+import { StandingsController } from './standings.controller'
+import { StandingsService } from './standings.service'
 
-@Module({})
-export class ustandingsModule {}
+@Module({
+  controllers: [StandingsController],
+  providers: [StandingsService],
+  exports: [StandingsService],
+})
+export class StandingsModule {}

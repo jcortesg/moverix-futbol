@@ -1,0 +1,35 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - build
+      - -f
+      - apps/admin/Dockerfile
+      - -t
+      - us-central1-docker.pkg.dev/moverix/moverix/admin:manual-deploy
+      - -t
+      - us-central1-docker.pkg.dev/moverix/moverix/admin:latest
+      - --build-arg
+      - NEXT_PUBLIC_API_URL=https://api-ftb.moverix.co/ftb/v1
+      - --build-arg
+      - NEXT_PUBLIC_FIREBASE_API_KEY=AIzaSyD5qwrQf-dSU8qtaDunCYtMpBLsRsQWJc8
+      - --build-arg
+      - NEXT_PUBLIC_FIREBASE_PROJECT_ID=moverix
+      - --build-arg
+      - NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=moverix.firebaseapp.com
+      - --build-arg
+      - NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=moverix.firebasestorage.app
+      - --build-arg
+      - NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=444229586513
+      - --build-arg
+      - NEXT_PUBLIC_FIREBASE_APP_ID=1:444229586513:web:a470442690e2ed708c3270
+      - .
+
+images:
+  - us-central1-docker.pkg.dev/moverix/moverix/admin:manual-deploy
+  - us-central1-docker.pkg.dev/moverix/moverix/admin:latest
+
+logsBucket: gs://moverix_cloudbuild/logs
+
+options:
+  machineType: E2_HIGHCPU_8
+  logging: GCS_ONLY

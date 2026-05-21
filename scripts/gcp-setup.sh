@@ -7,8 +7,8 @@ set -e
 PROJECT_ID="moverix"
 PROJECT_NUMBER="444229586513"
 REGION="us-central1"
-GITHUB_ORG="tu-org"          # ← cambia esto
-GITHUB_REPO="moverix"        # ← cambia esto si el repo se llama diferente
+GITHUB_ORG="jcortesg"
+GITHUB_REPO="moverix-futbol"
 SA_NAME="moverix-cicd"
 
 echo "==> Configurando proyecto GCP: $PROJECT_ID"

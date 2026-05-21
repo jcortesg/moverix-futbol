@@ -100,7 +100,9 @@ jobs:
             --platform managed \
             --allow-unauthenticated \
             --set-env-vars NODE_ENV=${{ steps.env.outputs.env }} \
-            --set-secrets DATABASE_URL=moverix-db-url:latest,FIREBASE_PROJECT_ID=moverix-firebase-project:latest \
+            --set-secrets DATABASE_URL=moverix-db-url:latest,FIREBASE_PROJECT_ID=moverix-firebase-project:latest,CORS_ORIGINS=moverix-cors-origins:latest,GCS_BUCKET=moverix-gcs-bucket:latest \
+            --set-env-vars API_BASE_URL=https://api-ftb.moverix.co \
+            --add-cloudsql-instances moverix:us-central1:moverix-db \
             --min-instances 0 \
             --max-instances 10 \
             --memory 512Mi \

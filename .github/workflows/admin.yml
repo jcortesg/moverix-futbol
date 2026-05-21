@@ -81,7 +81,7 @@ jobs:
             -f apps/admin/Dockerfile \
             -t ${{ env.IMAGE }}:${{ steps.env.outputs.tag }} \
             -t ${{ env.IMAGE }}:latest \
-            --build-arg NEXT_PUBLIC_API_URL=${{ secrets.NEXT_PUBLIC_API_URL }} \
+            --build-arg NEXT_PUBLIC_API_URL=https://api-ftb.moverix.co/ftb/v1 \
             --build-arg NEXT_PUBLIC_FIREBASE_API_KEY=${{ secrets.NEXT_PUBLIC_FIREBASE_API_KEY }} \
             --build-arg NEXT_PUBLIC_FIREBASE_PROJECT_ID=moverix \
             .

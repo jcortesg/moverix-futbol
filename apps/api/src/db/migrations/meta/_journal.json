@@ -1,0 +1,111 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1776818677136,
+      "tag": "0000_graceful_killer_shrike",
+      "breakpoints": true
+    }
+    ,{
+      "idx": 1,
+      "version": "7",
+      "when": 1776900000000,
+      "tag": "0001_add_banner_and_edition_media",
+      "breakpoints": true
+    }
+    ,{
+      "idx": 2,
+      "version": "7",
+      "when": 1777000000000,
+      "tag": "0002_format_config_redesign",
+      "breakpoints": true
+    }
+    ,{
+      "idx": 3,
+      "version": "7",
+      "when": 1777100000000,
+      "tag": "0003_updated_at_trigger",
+      "breakpoints": true
+    }
+    ,{
+      "idx": 4,
+      "version": "7",
+      "when": 1777200000000,
+      "tag": "0004_teams_player_owned",
+      "breakpoints": true
+    }
+    ,{
+      "idx": 5,
+      "version": "7",
+      "when": 1777300000000,
+      "tag": "0005_registration_player_fields",
+      "breakpoints": true
+    }
+    ,{
+      "idx": 6,
+      "version": "7",
+      "when": 1777400000000,
+      "tag": "0006_roster_unique_email_doc",
+      "breakpoints": true
+    }
+    ,{
+      "idx": 7,
+      "version": "7",
+      "when": 1777500000000,
+      "tag": "0007_venue_pitch_count",
+      "breakpoints": true
+    }
+    ,{
+      "idx": 8,
+      "version": "7",
+      "when": 1777600000000,
+      "tag": "0008_payments_fine_id",
+      "breakpoints": true
+    }
+    ,{
+      "idx": 9,
+      "version": "7",
+      "when": 1777700000000,
+      "tag": "0009_match_events_mvp",
+      "breakpoints": true
+    }
+    ,{
+      "idx": 10,
+      "version": "7",
+      "when": 1777800000000,
+      "tag": "0010_fines_concept",
+      "breakpoints": true
+    }
+    ,{
+      "idx": 11,
+      "version": "7",
+      "when": 1777900000000,
+      "tag": "0011_teams_slug_members",
+      "breakpoints": true
+    }
+    ,{
+      "idx": 12,
+      "version": "7",
+      "when": 1778000000000,
+      "tag": "0012_backfill_team_members",
+      "breakpoints": true
+    }
+    ,{
+      "idx": 13,
+      "version": "7",
+      "when": 1778100000000,
+      "tag": "0013_edition_public_landing",
+      "breakpoints": true
+    }
+    ,{
+      "idx": 14,
+      "version": "7",
+      "when": 1778200000000,
+      "tag": "0014_player_profile_doc_number",
+      "breakpoints": true
+    }
+  ]
+}

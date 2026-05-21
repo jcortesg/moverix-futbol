@@ -9,7 +9,8 @@
       "@moverix/types": ["../../packages/types/src/index.ts"]
     },
     "emitDecoratorMetadata": true,
-    "experimentalDecorators": true
+    "experimentalDecorators": true,
+    "types": ["jest", "node"]
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist", "test"]
