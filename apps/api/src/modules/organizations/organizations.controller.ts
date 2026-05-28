@@ -59,6 +59,36 @@ export class OrganizationsController {
     return this.organizationsService.remove(id)
   }
 
+  /** List members of an organization */
+  @Get(':id/members')
+  async getMembers(@Param('id', ParseUUIDPipe) id: string, @Request() req: { user: { uid: string } }) {
+    await this.ownership.verifyOrganization(req.user.uid, id)
+    return this.organizationsService.getMembers(id)
+  }
+
+  /** Add a member to the organization (by Firebase UID) */
+  @Post(':id/members')
+  async addMember(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: { uid: string; role?: string },
+    @Request() req: { user: { uid: string } },
+  ) {
+    await this.ownership.verifyOrganization(req.user.uid, id)
+    return this.organizationsService.addMember(id, dto.uid, dto.role || 'admin')
+  }
+
+  /** Remove a member from the organization */
+  @Delete(':id/members/:memberId')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async removeMember(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('memberId', ParseUUIDPipe) memberId: string,
+    @Request() req: { user: { uid: string } },
+  ) {
+    await this.ownership.verifyOrganization(req.user.uid, id)
+    return this.organizationsService.removeMember(id, memberId)
+  }
+
   @Post(':id/logo')
   @ApiConsumes('multipart/form-data')
   @ApiBody({ schema: { type: 'object', properties: { file: { type: 'string', format: 'binary' } } } })

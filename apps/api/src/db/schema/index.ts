@@ -1,4 +1,5 @@
 export * from './organizations'
+export * from './organization_members'
 export * from './leagues'
 export * from './editions'
 export * from './venues'

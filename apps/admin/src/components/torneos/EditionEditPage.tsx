@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation'
 import {
   ChevronLeft, Loader2, Save, Upload, Trophy,
   AlertCircle, CheckCircle2, Calendar, Users,
-  Settings2, DollarSign, FileText, Clock,
+  Settings2, DollarSign, FileText,
   ArrowUp, ArrowDown, Scale, Globe, Copy, ExternalLink,
 } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -20,22 +20,14 @@ import {
   type EditionFromApi,
   type EditionStatus,
   type FormatConfig,
-  type FormatType,
-  type PhaseGroups,
-  type PhaseRoundRobin,
-  type PhaseKnockout,
-  type PhaseMultiCup,
   type TiebreakerRules,
   type TiebreakerCriterion,
 } from '@/lib/leagues'
 import { Field, SectionCard, Toggle, inputCls } from '@/components/ui/form'
 import {
   STATUSES,
-  FORMAT_TYPES,
-  PhaseGroupsForm,
-  PhaseRoundRobinForm,
-  PhaseKnockoutForm,
-  PhaseMultiCupForm,
+  FORMAT_TEMPLATES,
+  FormatSection,
 } from './edition-form'
 
 // ─── Tabs metadata ───────────────────────────────────────────────────────────
@@ -209,30 +201,10 @@ export function EditionEditPage({ editionId }: { editionId: string }) {
       .finally(() => setLoading(false))
   }, [editionId])
 
+  const selectedTemplate = FORMAT_TEMPLATES.find((t) => t.id === formatConfig.type)
+
   function patchFormat(patch: Partial<FormatConfig>) {
     setFormatConfig((prev) => ({ ...prev, ...patch }))
-  }
-
-  function selectFormatType(type: FormatType) {
-    const fmt = FORMAT_TYPES.find((f) => f.value === type)!
-    const newConfig: FormatConfig = {
-      ...formatConfig,
-      type,
-      phase1: fmt.phase1 === 'groups'
-        ? { kind: 'groups', groupCount: 4, teamsPerGroup: 4, qualifiersPerGroup: 2, doubleLeg: false }
-        : fmt.phase1 === 'round_robin'
-          ? { kind: 'round_robin', doubleLeg: true }
-          : undefined,
-      phase2: fmt.phase2 === 'knockout'
-        ? { kind: 'knockout', bracketSize: 8, hasThirdPlace: false, hasRepechage: false }
-        : fmt.phase2 === 'multi_cup'
-          ? { kind: 'multi_cup', cups: [
-              { name: 'Copa A', from: 1, to: 16, size: 16 },
-              { name: 'Copa B', from: 17, to: 32, size: 16 },
-            ] }
-          : undefined,
-    }
-    setFormatConfig(newConfig)
   }
 
   async function handleSave() {
@@ -265,7 +237,6 @@ export function EditionEditPage({ editionId }: { editionId: string }) {
   }
 
   const currentStatus = STATUSES.find((s) => s.value === status)
-  const selectedFormat = FORMAT_TYPES.find((f) => f.value === formatConfig.type)
 
   if (loading) {
     return (
@@ -446,108 +417,11 @@ export function EditionEditPage({ editionId }: { editionId: string }) {
 
           {tab === 'format' && (
             <SectionCard icon={Trophy} color="bg-indigo-500" title="Formato de competencia" description="Estructura y modalidad del torneo">
-              <div className="space-y-5">
-                <div>
-                  <p className="text-sm font-semibold text-slate-700 mb-3">Tipo de formato</p>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {FORMAT_TYPES.map(({ value, label, icon, desc }) => (
-                      <button
-                        key={value}
-                        type="button"
-                        onClick={() => selectFormatType(value)}
-                        className={clsx(
-                          'flex flex-col items-start gap-1.5 px-4 py-3 rounded-xl border text-left transition-all',
-                          formatConfig.type === value
-                            ? 'border-indigo-400 bg-indigo-50 ring-2 ring-indigo-300 ring-offset-1'
-                            : 'border-slate-200 bg-white hover:border-indigo-200 hover:bg-indigo-50/40',
-                        )}
-                      >
-                        <span className="flex items-center gap-2 text-sm font-bold text-slate-800">
-                          <span>{icon}</span> {label}
-                        </span>
-                        <span className="text-xs text-slate-500 leading-relaxed">{desc}</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {formatConfig.type && selectedFormat?.phase1 === 'groups' && (
-                  <PhaseGroupsForm
-                    value={(formatConfig.phase1 as PhaseGroups) ?? { kind: 'groups', groupCount: 4, teamsPerGroup: 4, qualifiersPerGroup: 2, doubleLeg: false }}
-                    onChange={(p1) => patchFormat({ phase1: p1 })}
-                  />
-                )}
-                {formatConfig.type && selectedFormat?.phase1 === 'round_robin' && (
-                  <PhaseRoundRobinForm
-                    value={(formatConfig.phase1 as PhaseRoundRobin) ?? { kind: 'round_robin', doubleLeg: true }}
-                    onChange={(p1) => patchFormat({ phase1: p1 })}
-                  />
-                )}
-                {formatConfig.type && selectedFormat?.phase2 === 'knockout' && (
-                  <PhaseKnockoutForm
-                    value={(formatConfig.phase2 as PhaseKnockout) ?? { kind: 'knockout', bracketSize: 8, hasThirdPlace: false, hasRepechage: false }}
-                    onChange={(p2) => patchFormat({ phase2: p2 })}
-                    label={selectedFormat?.phase1 ? 'Fase 2 — Eliminatoria' : 'Cuadro eliminatorio'}
-                  />
-                )}
-                {formatConfig.type && selectedFormat?.phase2 === 'multi_cup' && (
-                  <PhaseMultiCupForm
-                    value={(formatConfig.phase2 as PhaseMultiCup) ?? { kind: 'multi_cup', cups: [] }}
-                    onChange={(p2) => patchFormat({ phase2: p2 })}
-                  />
-                )}
-
-                {formatConfig.type && (
-                  <>
-                    <div className="h-px bg-slate-100" />
-                    <div>
-                      <p className="text-sm font-semibold text-slate-700 mb-3">Reglas del partido</p>
-                      <div className="space-y-3">
-                        <div className="grid grid-cols-2 gap-3">
-                          <Toggle
-                            checked={formatConfig.hasExtraTime ?? false}
-                            onChange={(v) => patchFormat({ hasExtraTime: v })}
-                            label="Tiempo extra"
-                            description="Dos tiempos adicionales si el partido termina en empate."
-                          />
-                          <Toggle
-                            checked={formatConfig.hasPenalties ?? false}
-                            onChange={(v) => patchFormat({ hasPenalties: v })}
-                            label="Penales"
-                            description="Se define con penales si persiste el empate tras el tiempo extra."
-                          />
-                        </div>
-                        <div className="flex items-end gap-4">
-                          <div className="w-44">
-                            <Field label="Minutos por tiempo">
-                              <div className="relative">
-                                <input
-                                  type="number" min={5} max={60}
-                                  className={inputCls}
-                                  value={formatConfig.minutesPerHalf ?? ''}
-                                  onChange={(e) => patchFormat({ minutesPerHalf: parseInt(e.target.value) || undefined })}
-                                  placeholder="25"
-                                />
-                                <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs text-slate-400 pointer-events-none">min</span>
-                              </div>
-                            </Field>
-                          </div>
-                          {formatConfig.minutesPerHalf ? (
-                            <div className="flex items-center gap-2 mb-1 px-4 py-2.5 bg-indigo-50 border border-indigo-200 rounded-xl">
-                              <Clock size={14} className="text-indigo-500" />
-                              <span className="text-sm font-semibold text-indigo-700">{formatConfig.minutesPerHalf * 2} min totales</span>
-                            </div>
-                          ) : null}
-                        </div>
-                      </div>
-                    </div>
-                  </>
-                )}
-
-                {!formatConfig.type && (
-                  <p className="text-xs text-slate-400 text-center py-4">Selecciona un tipo de formato para configurar las fases.</p>
-                )}
-              </div>
+              <FormatSection
+                formatConfig={formatConfig}
+                onChange={setFormatConfig}
+                maxTeams={parseInt(maxTeams) || 16}
+              />
             </SectionCard>
           )}
 
@@ -622,22 +496,22 @@ export function EditionEditPage({ editionId }: { editionId: string }) {
             <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4">
               <p className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-3">Formato</p>
               <div className="flex items-start gap-2">
-                <span className="text-lg">{selectedFormat?.icon}</span>
+                <span className="text-lg">{selectedTemplate?.icon}</span>
                 <div>
-                  <p className="text-sm font-bold text-slate-800">{selectedFormat?.label}</p>
+                  <p className="text-sm font-bold text-slate-800">{selectedTemplate?.label}</p>
                   {formatConfig.phase1 && 'groupCount' in formatConfig.phase1 && (
                     <p className="text-xs text-slate-500 mt-0.5">
-                      {(formatConfig.phase1 as PhaseGroups).groupCount} grupos · {(formatConfig.phase1 as PhaseGroups).teamsPerGroup} equipos c/u
+                      {(formatConfig.phase1 as { groupCount: number }).groupCount} grupos · {(formatConfig.phase1 as { teamsPerGroup: number }).teamsPerGroup} equipos c/u
                     </p>
                   )}
                   {formatConfig.phase2 && 'bracketSize' in formatConfig.phase2 && (
                     <p className="text-xs text-slate-500 mt-0.5">
-                      Bracket de {(formatConfig.phase2 as PhaseKnockout).bracketSize} equipos
+                      Bracket de {(formatConfig.phase2 as { bracketSize: number }).bracketSize} equipos
                     </p>
                   )}
                   {formatConfig.phase2 && 'cups' in formatConfig.phase2 && (
                     <p className="text-xs text-slate-500 mt-0.5">
-                      {(formatConfig.phase2 as PhaseMultiCup).cups.length} copas
+                      {(formatConfig.phase2 as { cups: unknown[] }).cups.length} copas
                     </p>
                   )}
                 </div>

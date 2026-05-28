@@ -11,13 +11,13 @@ import {
   deleteReferee,
   type RefereeFromApi,
 } from '@/lib/referees'
-import { getMyOrganization, type OrganizationFromApi } from '@/lib/leagues'
+import { useActiveOrganization } from '@/contexts/ActiveOrganizationContext'
 import { Field, inputCls } from '@/components/ui/form'
 
 type Mode = { kind: 'create' } | { kind: 'edit'; referee: RefereeFromApi }
 
 export function RefereesManager() {
-  const [org, setOrg] = useState<OrganizationFromApi | null>(null)
+  const { activeOrg } = useActiveOrganization()
   const [referees, setReferees] = useState<RefereeFromApi[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -29,15 +29,11 @@ export function RefereesManager() {
   }
 
   useEffect(() => {
-    getMyOrganization()
-      .then(async (o) => {
-        if (!o) { setError('No hay organización configurada.'); return }
-        setOrg(o)
-        await reload(o.id)
-      })
+    if (!activeOrg) { setError('No hay organización configurada.'); setLoading(false); return }
+    reload(activeOrg.id)
       .catch(() => setError('No se pudieron cargar los árbitros.'))
       .finally(() => setLoading(false))
-  }, [])
+  }, [activeOrg?.id])
 
   async function handleDelete(id: string) {
     if (!confirm('¿Eliminar este árbitro? Los partidos pasados no se modifican.')) return
@@ -58,7 +54,7 @@ export function RefereesManager() {
     )
   }
 
-  if (error && !org) {
+  if (error && !activeOrg) {
     return (
       <div className="flex items-center gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
         <AlertCircle size={16} /> {error}
@@ -164,13 +160,13 @@ export function RefereesManager() {
         </div>
       )}
 
-      {mode && org && (
+      {mode && activeOrg && (
         <RefereeDrawer
           mode={mode}
-          orgId={org.id}
+          orgId={activeOrg.id}
           onClose={() => setMode(null)}
           onSaved={async () => {
-            await reload(org.id)
+            await reload(activeOrg.id)
             setMode(null)
           }}
         />

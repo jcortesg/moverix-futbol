@@ -7,7 +7,8 @@ import {
   Wand2, Clock, MapPin, UserCheck, X, Save, Trash2, Pencil, CheckCircle2, Award,
 } from 'lucide-react'
 import { clsx } from 'clsx'
-import { getEdition, getMyOrganization, type EditionFromApi, type OrganizationFromApi } from '@/lib/leagues'
+import { getEdition, type EditionFromApi } from '@/lib/leagues'
+import { useActiveOrganization } from '@/contexts/ActiveOrganizationContext'
 import { getMatchdays, type MatchdayFromApi } from '@/lib/matchdays'
 import {
   generateFixture,
@@ -43,7 +44,7 @@ export function PartidosManager({
   backHref?: string
   backLabel?: string
 }) {
-  const [, setOrg] = useState<OrganizationFromApi | null>(null)
+  const { activeOrg } = useActiveOrganization()
   const [edition, setEdition] = useState<EditionFromApi | null>(null)
   const [matchdays, setMatchdays] = useState<MatchdayFromApi[]>([])
   const [matches, setMatches] = useState<MatchFromApi[]>([])
@@ -74,22 +75,23 @@ export function PartidosManager({
   }
 
   useEffect(() => {
-    Promise.all([
-      getMyOrganization().then(async (o) => {
-        setOrg(o)
-        if (o) {
-          const [v, r] = await Promise.all([getVenues(o.id), getReferees(o.id)])
-          setVenues(v)
-          setReferees(r)
-        }
-      }),
+    const promises: Promise<unknown>[] = [
       getEdition(editionId).then(setEdition),
       reload(),
-    ])
+    ]
+    if (activeOrg) {
+      promises.push(
+        Promise.all([getVenues(activeOrg.id), getReferees(activeOrg.id)]).then(([v, r]) => {
+          setVenues(v)
+          setReferees(r)
+        }),
+      )
+    }
+    Promise.all(promises)
       .catch(() => setError('No se pudieron cargar los partidos.'))
       .finally(() => setLoading(false))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editionId])
+  }, [editionId, activeOrg?.id])
 
   const teamMap = useMemo(() => {
     const m = new Map<string, RegistrationFromApi['team']>()

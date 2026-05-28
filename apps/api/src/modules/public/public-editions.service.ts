@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common'
 import { and, eq, inArray, desc, sql } from 'drizzle-orm'
 import { DatabaseService } from '../../db/database.service'
-import { editions, leagues, organizations, registrations, teams, venues } from '../../db/schema'
+import { editions, leagues, organizations, organizationMembers, registrations, teams, venues } from '../../db/schema'
 
 @Injectable()
 export class PublicEditionsService {
@@ -90,11 +90,19 @@ export class PublicEditionsService {
 
     if (!edition) throw new NotFoundException('Torneo no encontrado')
 
-    // If not published, only the owner can see it
+    // If not published, only org members can see it
     if (!edition.isPublished) {
-      if (!uid || uid !== edition.organization.ownerUid) {
-        throw new NotFoundException('Torneo no encontrado')
-      }
+      if (!uid) throw new NotFoundException('Torneo no encontrado')
+      const [member] = await this.db
+        .select({ id: organizationMembers.id })
+        .from(organizationMembers)
+        .where(
+          and(
+            eq(organizationMembers.organizationId, edition.organization.id),
+            eq(organizationMembers.uid, uid),
+          ),
+        )
+      if (!member) throw new NotFoundException('Torneo no encontrado')
     }
 
     const registeredTeams = await this.db

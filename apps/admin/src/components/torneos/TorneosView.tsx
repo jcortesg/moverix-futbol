@@ -8,7 +8,6 @@ import {
 import Link from 'next/link'
 import { clsx } from 'clsx'
 import {
-  getMyOrganization,
   getLeaguesByOrg,
   getEditionsByLeague,
   type LeagueFromApi,
@@ -16,6 +15,7 @@ import {
   type EditionStatus,
 } from '@/lib/leagues'
 import { useActiveEdition } from '@/contexts/ActiveEditionContext'
+import { useActiveOrganization } from '@/contexts/ActiveOrganizationContext'
 import { LeagueEditDrawer } from './LeagueEditDrawer'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -328,16 +328,18 @@ function LigaCard({
 // ─── Main view ────────────────────────────────────────────────────────────────
 
 export function TorneosView() {
+  const { activeOrg } = useActiveOrganization()
   const [ligas, setLigas] = useState<LigaWithEditions[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     async function load() {
+      setLoading(true)
+      setError(null)
       try {
-        const org = await getMyOrganization()
-        if (!org) { setLigas([]); return }
-        const leagues = await getLeaguesByOrg(org.id)
+        if (!activeOrg) { setLigas([]); return }
+        const leagues = await getLeaguesByOrg(activeOrg.id)
         const withEditions = await Promise.all(
           leagues.map(async (league, i) => ({
             league,
@@ -353,7 +355,7 @@ export function TorneosView() {
       }
     }
     load()
-  }, [])
+  }, [activeOrg?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleLeagueUpdated(updated: LeagueFromApi) {
     setLigas((prev) =>

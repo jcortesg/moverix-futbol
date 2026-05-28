@@ -1,19 +1,21 @@
 'use client'
 
 import { createContext, useContext, useEffect, useState, useCallback } from 'react'
-import { type User, onAuthStateChanged } from 'firebase/auth'
+import { type User, onAuthStateChanged, signOut } from 'firebase/auth'
 import { auth } from '@/lib/firebase'
 
 interface AuthContextValue {
   user: User | null
   loading: boolean
   getToken: () => Promise<string | null>
+  logout: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextValue>({
   user: null,
   loading: true,
   getToken: async () => null,
+  logout: async () => {},
 })
 
 const AUTH_COOKIE = 'moverix-auth'
@@ -44,8 +46,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return auth.currentUser.getIdToken()
   }, [])
 
+  const logout = useCallback(async () => {
+    await signOut(auth)
+    setAuthCookie(false)
+  }, [])
+
   return (
-    <AuthContext.Provider value={{ user, loading, getToken }}>
+    <AuthContext.Provider value={{ user, loading, getToken, logout }}>
       {children}
     </AuthContext.Provider>
   )

@@ -1,8 +1,8 @@
 import { Injectable, ForbiddenException } from '@nestjs/common'
-import { eq } from 'drizzle-orm'
+import { eq, and } from 'drizzle-orm'
 import { DatabaseService } from '../../db/database.service'
 import {
-  organizations,
+  organizationMembers,
   leagues,
   editions,
   registrations,
@@ -30,13 +30,18 @@ export class OwnershipService {
     return this.database.db
   }
 
-  /** Verify that the user owns the organization */
+  /** Verify that the user is a member (owner or admin) of the organization */
   async verifyOrganization(uid: string, organizationId: string): Promise<void> {
-    const [org] = await this.db
-      .select({ ownerUid: organizations.ownerUid })
-      .from(organizations)
-      .where(eq(organizations.id, organizationId))
-    if (!org || org.ownerUid !== uid) {
+    const [member] = await this.db
+      .select({ id: organizationMembers.id })
+      .from(organizationMembers)
+      .where(
+        and(
+          eq(organizationMembers.organizationId, organizationId),
+          eq(organizationMembers.uid, uid),
+        ),
+      )
+    if (!member) {
       throw new ForbiddenException('No tienes acceso a esta organizacion')
     }
   }

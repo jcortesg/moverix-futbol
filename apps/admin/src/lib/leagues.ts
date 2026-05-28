@@ -43,15 +43,37 @@ export type PhaseKnockout = {
   hasRepechage: boolean
 }
 
+export type CupFormat = 'knockout' | 'groups_knockout' | 'league'
+
+export type CupGroupsConfig = {
+  groupCount: number
+  teamsPerGroup: number
+  qualifiersPerGroup: number
+  doubleLeg: boolean
+}
+
 export type CupConfig = {
   name: string
   from: number
   to: number
   size: number
+  format?: CupFormat
+  groups?: CupGroupsConfig
+  hasThirdPlace?: boolean
+  hasCrossover?: boolean
+  doubleLeg?: boolean
+}
+
+export type CupDistribution = 'reclassification' | 'group_position'
+
+export const CUP_DISTRIBUTION_LABEL: Record<CupDistribution, string> = {
+  reclassification: 'Reclasificación general',
+  group_position: 'Posición en el grupo',
 }
 
 export type PhaseMultiCup = {
   kind: 'multi_cup'
+  distribution?: CupDistribution
   cups: CupConfig[]
 }
 
@@ -143,6 +165,11 @@ export type OrganizationFromApi = {
 export async function getMyOrganization(): Promise<OrganizationFromApi | null> {
   const { data } = await api.get<OrganizationFromApi[]>('/organizations')
   return data[0] ?? null
+}
+
+export async function getMyOrganizations(): Promise<OrganizationFromApi[]> {
+  const { data } = await api.get<OrganizationFromApi[]>('/organizations')
+  return data
 }
 
 export async function getLeaguesByOrg(organizationId: string): Promise<LeagueFromApi[]> {

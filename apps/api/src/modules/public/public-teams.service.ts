@@ -2,8 +2,9 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  ForbiddenException,
 } from '@nestjs/common'
-import { and, eq } from 'drizzle-orm'
+import { and, asc, eq } from 'drizzle-orm'
 import { DatabaseService } from '../../db/database.service'
 import {
   teams,
@@ -228,5 +229,64 @@ export class PublicTeamsService {
       joined: !existingMember,
       registration: registrationInfo,
     }
+  }
+
+  /** Verify user is the team director for a registration */
+  private async verifyDirector(uid: string, registrationId: string) {
+    const [reg] = await this.db
+      .select({ teamId: registrations.teamId })
+      .from(registrations)
+      .where(eq(registrations.id, registrationId))
+    if (!reg) throw new NotFoundException('Inscripcion no encontrada')
+
+    const [team] = await this.db
+      .select({ directorUid: teams.directorUid })
+      .from(teams)
+      .where(eq(teams.id, reg.teamId))
+    if (!team || team.directorUid !== uid) {
+      throw new ForbiddenException('No eres el director de este equipo')
+    }
+    return reg
+  }
+
+  /** Get roster for a registration (director only) */
+  async getRosterForDirector(uid: string, registrationId: string) {
+    await this.verifyDirector(uid, registrationId)
+    return this.db
+      .select()
+      .from(registrationPlayers)
+      .where(eq(registrationPlayers.registrationId, registrationId))
+      .orderBy(asc(registrationPlayers.jerseyNumber), asc(registrationPlayers.playerName))
+  }
+
+  /** Add player manually to roster (director only) */
+  async addPlayerForDirector(
+    uid: string,
+    dto: {
+      registrationId: string
+      playerName: string
+      firstName?: string
+      lastName?: string
+      docNumber?: string
+      phone?: string
+      email?: string
+      position?: string
+      jerseyNumber?: number
+    },
+  ) {
+    await this.verifyDirector(uid, dto.registrationId)
+    const [row] = await this.db.insert(registrationPlayers).values({
+      registrationId: dto.registrationId,
+      playerUid: `manual-${Date.now()}`,
+      playerName: dto.playerName,
+      firstName: dto.firstName,
+      lastName: dto.lastName,
+      docNumber: dto.docNumber,
+      phone: dto.phone,
+      email: dto.email,
+      position: dto.position as any,
+      jerseyNumber: dto.jerseyNumber,
+    }).returning()
+    return row
   }
 }

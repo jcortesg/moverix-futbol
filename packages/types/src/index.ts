@@ -16,11 +16,27 @@ export type UserRole = 'super_admin' | 'org_admin' | 'delegado' | 'jugador' | 'f
 
 // ─── Tournament Format Config (JSONB) ────────────────────────────────────────
 
+export type CupDistribution = 'reclassification' | 'group_position'
+export type CupFormat = 'knockout' | 'groups_knockout'
+
+export interface CupGroupsConfig {
+  groupCount: number
+  teamsPerGroup: number
+  qualifiersPerGroup: number
+  doubleLeg: boolean
+}
+
 export interface CupConfig {
   name: string       // "Copa A"
-  fromRank: number   // 1
-  toRank: number     // 16
-  bracketSize: number
+  from: number       // reclassification: global rank pos | group_position: pos within group
+  to: number
+  size: number       // bracket size (power of 2)
+  format?: CupFormat
+  groups?: CupGroupsConfig
+  // Legacy fields (deprecated)
+  fromRank?: number
+  toRank?: number
+  bracketSize?: number
 }
 
 export interface Phase1Config {
@@ -36,6 +52,7 @@ export interface Phase2Config {
   bracketSize?: 4 | 8 | 16 | 32
   hasThirdPlace?: boolean
   hasRepechage?: boolean
+  distribution?: CupDistribution
   cups?: CupConfig[]
   doubleLeg?: boolean
 }

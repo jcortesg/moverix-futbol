@@ -6,16 +6,17 @@ import {
   CheckCircle2, AlertCircle, User, MapPin,
 } from 'lucide-react'
 import {
-  getMyOrganization,
   updateOrganization,
   uploadOrganizationLogo,
   type OrganizationFromApi,
 } from '@/lib/leagues'
 import { useAuth } from '@/contexts/AuthContext'
+import { useActiveOrganization } from '@/contexts/ActiveOrganizationContext'
 import { SectionCard, Field, inputCls } from '@/components/ui/form'
 
 export function ConfigView() {
   const { user } = useAuth()
+  const { activeOrg } = useActiveOrganization()
   const [org, setOrg] = useState<OrganizationFromApi | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -29,18 +30,14 @@ export function ConfigView() {
   const logoRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
-    getMyOrganization()
-      .then((o) => {
-        if (o) {
-          setOrg(o)
-          setName(o.name)
-          setCity(o.city ?? '')
-          setLogoPreview(o.logoUrl)
-        }
-      })
-      .catch(() => setError('No se pudo cargar la organizacion'))
-      .finally(() => setLoading(false))
-  }, [])
+    if (activeOrg) {
+      setOrg(activeOrg)
+      setName(activeOrg.name)
+      setCity(activeOrg.city ?? '')
+      setLogoPreview(activeOrg.logoUrl)
+    }
+    setLoading(false)
+  }, [activeOrg?.id])
 
   async function handleSave() {
     if (!org) return

@@ -12,14 +12,14 @@ import {
   uploadVenuePhoto,
   type VenueFromApi,
 } from '@/lib/venues'
-import { getMyOrganization, type OrganizationFromApi } from '@/lib/leagues'
+import { useActiveOrganization } from '@/contexts/ActiveOrganizationContext'
 import { resizeImage } from '@/lib/image'
 import { Field, inputCls } from '@/components/ui/form'
 
 type Mode = { kind: 'create' } | { kind: 'edit'; venue: VenueFromApi }
 
 export function VenuesManager() {
-  const [org, setOrg] = useState<OrganizationFromApi | null>(null)
+  const { activeOrg } = useActiveOrganization()
   const [venues, setVenues] = useState<VenueFromApi[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -31,18 +31,11 @@ export function VenuesManager() {
   }
 
   useEffect(() => {
-    getMyOrganization()
-      .then(async (o) => {
-        if (!o) {
-          setError('No hay organización configurada.')
-          return
-        }
-        setOrg(o)
-        await reload(o.id)
-      })
+    if (!activeOrg) { setError('No hay organización configurada.'); setLoading(false); return }
+    reload(activeOrg.id)
       .catch(() => setError('No se pudieron cargar las canchas.'))
       .finally(() => setLoading(false))
-  }, [])
+  }, [activeOrg?.id])
 
   async function handleDelete(id: string) {
     if (!confirm('¿Eliminar esta cancha? No afectará partidos ya jugados.')) return
@@ -63,7 +56,7 @@ export function VenuesManager() {
     )
   }
 
-  if (error && !org) {
+  if (error && !activeOrg) {
     return (
       <div className="flex items-center gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
         <AlertCircle size={16} /> {error}
@@ -118,13 +111,13 @@ export function VenuesManager() {
         </div>
       )}
 
-      {mode && org && (
+      {mode && activeOrg && (
         <VenueDrawer
           mode={mode}
-          orgId={org.id}
+          orgId={activeOrg.id}
           onClose={() => setMode(null)}
           onSaved={async () => {
-            await reload(org.id)
+            await reload(activeOrg.id)
             setMode(null)
           }}
         />

@@ -7,12 +7,12 @@ import {
   Shield, TrendingUp,
 } from 'lucide-react'
 import {
-  getMyOrganization,
   getLeaguesByOrg,
   getEditionsByLeague,
   type EditionFromApi,
   type LeagueFromApi,
 } from '@/lib/leagues'
+import { useActiveOrganization } from '@/contexts/ActiveOrganizationContext'
 import { getRegistrationsByEdition, type RegistrationFromApi } from '@/lib/registrations'
 import { getMatchesByEdition, type MatchFromApi } from '@/lib/matches'
 import { getPaymentsByEdition, type PaymentFromApi } from '@/lib/payments'
@@ -26,6 +26,7 @@ type EditionStats = {
 }
 
 export function ReportesView() {
+  const { activeOrg } = useActiveOrganization()
   const [editionStats, setEditionStats] = useState<EditionStats[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -33,10 +34,9 @@ export function ReportesView() {
   useEffect(() => {
     async function load() {
       try {
-        const org = await getMyOrganization()
-        if (!org) { setError('No se encontro la organizacion'); return }
+        if (!activeOrg) { setError('No se encontro la organizacion'); return }
 
-        const leagues = await getLeaguesByOrg(org.id)
+        const leagues = await getLeaguesByOrg(activeOrg.id)
         const allEditions: { edition: EditionFromApi; league: LeagueFromApi }[] = []
 
         for (const league of leagues) {
@@ -65,7 +65,7 @@ export function ReportesView() {
       }
     }
     load()
-  }, [])
+  }, [activeOrg?.id])
 
   if (loading) {
     return (

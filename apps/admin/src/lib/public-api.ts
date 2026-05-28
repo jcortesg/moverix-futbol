@@ -150,3 +150,53 @@ export async function joinAndRegister(
   })
   return data
 }
+
+/* ── Director roster endpoints (auth required) ──────────── */
+
+async function getAuthHeader(): Promise<Record<string, string>> {
+  if (typeof window === 'undefined') return {}
+  const { getAuth } = await import('firebase/auth')
+  const user = getAuth().currentUser
+  if (!user) return {}
+  const token = await user.getIdToken()
+  return { Authorization: `Bearer ${token}` }
+}
+
+export type RosterPlayer = {
+  id: string
+  registrationId: string
+  playerUid: string
+  playerName: string
+  firstName: string | null
+  lastName: string | null
+  docNumber: string | null
+  phone: string | null
+  email: string | null
+  position: string | null
+  jerseyNumber: number | null
+  addedAt: string
+}
+
+export async function getDirectorRoster(registrationId: string): Promise<RosterPlayer[]> {
+  const headers = await getAuthHeader()
+  const { data } = await publicApi.get(`/public/teams/roster/${registrationId}`, { headers })
+  return data
+}
+
+export type AddPlayerDto = {
+  registrationId: string
+  playerName: string
+  firstName?: string
+  lastName?: string
+  docNumber?: string
+  phone?: string
+  email?: string
+  position?: string
+  jerseyNumber?: number
+}
+
+export async function addDirectorPlayer(dto: AddPlayerDto): Promise<RosterPlayer> {
+  const headers = await getAuthHeader()
+  const { data } = await publicApi.post('/public/teams/roster/add-player', dto, { headers })
+  return data
+}

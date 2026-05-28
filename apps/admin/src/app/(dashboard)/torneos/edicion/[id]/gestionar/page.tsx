@@ -22,7 +22,7 @@ import {
   type TiebreakerRules,
 } from '@/lib/leagues'
 import { useActiveEdition } from '@/contexts/ActiveEditionContext'
-import { FORMAT_TYPES, STATUSES } from '@/components/torneos/edition-form'
+import { FORMAT_TEMPLATES, STATUSES } from '@/components/torneos/edition-form'
 
 type ManageTile = {
   label: string
@@ -187,7 +187,7 @@ function fmtMoney(amount: number, currency: string): string {
 function ConfigSummary({ edition }: { edition: EditionFromApi }) {
   const status = STATUSES.find((s) => s.value === edition.status)
   const cfg = (edition.formatConfig ?? {}) as FormatConfig
-  const fmt = FORMAT_TYPES.find((f) => f.value === cfg.type)
+  const fmt = FORMAT_TEMPLATES.find((f) => f.id === cfg.type)
   const tb: TiebreakerRules = edition.tiebreakerRules ?? DEFAULT_TIEBREAKERS
   // Primary criterion is always points; the rest are the ordered tiebreakers.
   const tbOrder = tb.order.filter((c) => c !== 'points')

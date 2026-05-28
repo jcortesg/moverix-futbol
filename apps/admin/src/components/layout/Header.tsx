@@ -4,13 +4,13 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Bell, Check, ChevronDown, Loader2, Search, Trophy } from 'lucide-react'
 import { clsx } from 'clsx'
 import {
-  getMyOrganization,
   getLeaguesByOrg,
   getEditionsByLeague,
   type EditionFromApi,
   type LeagueFromApi,
 } from '@/lib/leagues'
 import { useActiveEdition } from '@/contexts/ActiveEditionContext'
+import { useActiveOrganization } from '@/contexts/ActiveOrganizationContext'
 
 type EditionWithLeague = EditionFromApi & { leagueName: string }
 
@@ -18,19 +18,23 @@ const MANAGEABLE_STATUSES: EditionFromApi['status'][] = ['active', 'registration
 
 export function Header() {
   const { activeEdition, setActiveEdition, ready } = useActiveEdition()
+  const { activeOrg } = useActiveOrganization()
   const [editions, setEditions] = useState<EditionWithLeague[]>([])
   const [loading, setLoading] = useState(true)
   const [open, setOpen] = useState(false)
   const dropdownRef = useRef<HTMLDivElement>(null)
+  const activeEditionRef = useRef(activeEdition)
+  activeEditionRef.current = activeEdition
 
-  // Load all manageable editions across the org's leagues
+  // Load editions for active org and auto-select first one if none is set
   useEffect(() => {
     let cancelled = false
     async function load() {
+      setLoading(true)
+      setEditions([])
       try {
-        const org = await getMyOrganization()
-        if (!org) return
-        const leagues = await getLeaguesByOrg(org.id)
+        if (!activeOrg) return
+        const leagues = await getLeaguesByOrg(activeOrg.id)
         const all = await Promise.all(
           leagues.map(async (l: LeagueFromApi) => {
             const eds = await getEditionsByLeague(l.id)
@@ -38,31 +42,31 @@ export function Header() {
           }),
         )
         const flat = all.flat().filter((ed) => MANAGEABLE_STATUSES.includes(ed.status))
-        if (!cancelled) setEditions(flat)
+        if (!cancelled) {
+          setEditions(flat)
+          // Auto-select first edition if none is active (e.g. after org switch)
+          if (flat.length > 0 && !activeEditionRef.current) {
+            const first = flat.find((e) => e.status === 'active') ?? flat[0]
+            setActiveEdition({
+              id: first.id,
+              name: first.name,
+              season: first.season,
+              leagueId: first.leagueId,
+              leagueName: first.leagueName,
+              logoUrl: first.logoUrl,
+              bannerUrl: first.bannerUrl,
+            })
+          }
+        }
       } catch {
         // ignore
       } finally {
         if (!cancelled) setLoading(false)
       }
     }
-    load()
+    if (ready) load()
     return () => { cancelled = true }
-  }, [])
-
-  // Auto-select first active edition when none is set
-  useEffect(() => {
-    if (!ready || loading || activeEdition || editions.length === 0) return
-    const first = editions.find((e) => e.status === 'active') ?? editions[0]
-    setActiveEdition({
-      id: first.id,
-      name: first.name,
-      season: first.season,
-      leagueId: first.leagueId,
-      leagueName: first.leagueName,
-      logoUrl: first.logoUrl,
-      bannerUrl: first.bannerUrl,
-    })
-  }, [ready, loading, activeEdition, editions, setActiveEdition])
+  }, [activeOrg?.id, ready]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Close dropdown on outside click
   useEffect(() => {

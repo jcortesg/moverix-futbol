@@ -2,7 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common'
 import { eq } from 'drizzle-orm'
 import { randomUUID } from 'crypto'
 import { DatabaseService } from '../../db/database.service'
-import { organizations } from '../../db/schema'
+import { organizations, organizationMembers } from '../../db/schema'
 import { StorageService } from '../../common/services/storage.service'
 import { CreateOrganizationDto } from './dto/create-organization.dto'
 import { UpdateOrganizationDto } from './dto/update-organization.dto'
@@ -27,6 +27,13 @@ export class OrganizationsService {
       .values({ id, name: dto.name, city: dto.city, slug, ownerUid })
       .returning()
 
+    // Add creator as owner member
+    await this.db.insert(organizationMembers).values({
+      organizationId: id,
+      uid: ownerUid,
+      role: 'owner',
+    })
+
     return org
   }
 
@@ -40,11 +47,26 @@ export class OrganizationsService {
       .slice(0, 60)
   }
 
-  async findAll(ownerUid: string) {
+  async findAll(uid: string) {
     return this.db
-      .select()
+      .select({
+        id: organizations.id,
+        name: organizations.name,
+        slug: organizations.slug,
+        logoUrl: organizations.logoUrl,
+        city: organizations.city,
+        country: organizations.country,
+        ownerUid: organizations.ownerUid,
+        active: organizations.active,
+        createdAt: organizations.createdAt,
+        updatedAt: organizations.updatedAt,
+      })
       .from(organizations)
-      .where(eq(organizations.ownerUid, ownerUid))
+      .innerJoin(
+        organizationMembers,
+        eq(organizationMembers.organizationId, organizations.id),
+      )
+      .where(eq(organizationMembers.uid, uid))
   }
 
   async findOne(id: string) {
@@ -73,6 +95,29 @@ export class OrganizationsService {
     await this.findOne(id)
     await this.db.delete(organizations).where(eq(organizations.id, id))
     return { id }
+  }
+
+  async getMembers(organizationId: string) {
+    return this.db
+      .select()
+      .from(organizationMembers)
+      .where(eq(organizationMembers.organizationId, organizationId))
+  }
+
+  async addMember(organizationId: string, uid: string, role: string) {
+    const [member] = await this.db
+      .insert(organizationMembers)
+      .values({ organizationId, uid, role })
+      .onConflictDoNothing()
+      .returning()
+    return member
+  }
+
+  async removeMember(_organizationId: string, memberId: string) {
+    await this.db
+      .delete(organizationMembers)
+      .where(eq(organizationMembers.id, memberId))
+    return { id: memberId }
   }
 
   async uploadLogo(id: string, file: Express.Multer.File) {
