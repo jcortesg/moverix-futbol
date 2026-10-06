@@ -57,10 +57,15 @@ export interface Phase2Config {
   doubleLeg?: boolean
 }
 
+export type PhaseConfig = Phase1Config | Phase2Config
+
 export interface FormatConfig {
   type: string
-  phase1: Phase1Config
-  phase2: Phase2Config
+  phases: PhaseConfig[]
+  /** @deprecated Use phases array instead */
+  phase1?: Phase1Config
+  /** @deprecated Use phases array instead */
+  phase2?: Phase2Config
   tiebreakerRules?: TiebreakerRule[]
 }
 

@@ -37,3 +37,6 @@ ios
 
 # GCP
 gcp-service-account.json
+
+# Archivos subidos en desarrollo local (en produccion van a GCS)
+apps/api/uploads/
