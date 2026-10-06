@@ -1,4 +1,4 @@
-import { Controller, Get, Query } from '@nestjs/common'
+import { Controller, Get, Headers, Query } from '@nestjs/common'
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger'
 import { MobileSearchService } from './mobile-search.service'
 
@@ -9,7 +9,7 @@ export class MobileSearchController {
   constructor(private readonly service: MobileSearchService) {}
 
   @Get()
-  search(@Query('q') q: string) {
-    return this.service.search(q ?? '')
+  search(@Query('q') q: string, @Headers('x-client-platform') platform?: string) {
+    return this.service.search(q ?? '', (platform ?? '').toLowerCase() === 'ios')
   }
 }

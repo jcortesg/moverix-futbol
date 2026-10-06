@@ -1,9 +1,11 @@
-import { pgTable, uuid, varchar, integer, timestamp, pgEnum, uniqueIndex } from 'drizzle-orm/pg-core'
+import { pgTable, uuid, varchar, integer, timestamp, pgEnum, uniqueIndex, boolean } from 'drizzle-orm/pg-core'
+import { sql } from 'drizzle-orm'
 import { editions } from './editions'
 import { teams } from './teams'
 import { groups } from './groups'
 
 export const registrationStatusEnum = pgEnum('registration_status', [
+  'draft',
   'pending',
   'approved',
   'rejected',
@@ -21,7 +23,16 @@ export const registrations = pgTable(
       .notNull()
       .references(() => teams.id, { onDelete: 'cascade' }),
     groupId: uuid('group_id').references(() => groups.id, { onDelete: 'set null' }),
+    /**
+     * Candado de nómina de ESTE equipo, con tres estados:
+     *   null  = hereda el cierre general de la edición
+     *   true  = cerrado siempre
+     *   false = abierto siempre (excepción al cierre general)
+     */
+    rosterLocked: boolean('roster_locked'),
     status: registrationStatusEnum('status').notNull().default('pending'),
+    // Código de invitación por campeonato: el invitado entra directo a ESTA nómina.
+    inviteCode: varchar('invite_code', { length: 16 }),
     registeredByUid: varchar('registered_by_uid', { length: 128 }),
     seedRank: integer('seed_rank'),
     paidAt: timestamp('paid_at', { withTimezone: true }),
@@ -31,5 +42,8 @@ export const registrations = pgTable(
   },
   (t) => ({
     editionTeamUnique: uniqueIndex('registrations_edition_team_unique').on(t.editionId, t.teamId),
+    inviteCodeUnique: uniqueIndex('registrations_invite_code_unique')
+      .on(t.inviteCode)
+      .where(sql`${t.inviteCode} IS NOT NULL`),
   }),
 )

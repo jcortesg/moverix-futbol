@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common'
-import { and, eq, inArray, desc, sql } from 'drizzle-orm'
+import { and, eq, notInArray, desc, sql } from 'drizzle-orm'
 import { DatabaseService } from '../../db/database.service'
 import { editions, leagues, organizations, organizationMembers, registrations, teams, venues } from '../../db/schema'
 
@@ -20,6 +20,7 @@ export class PublicEditionsService {
         slug: editions.slug,
         season: editions.season,
         status: editions.status,
+        registrationsOpen: editions.registrationsOpen,
         logoUrl: editions.logoUrl,
         bannerUrl: editions.bannerUrl,
         startDate: editions.startDate,
@@ -37,7 +38,7 @@ export class PublicEditionsService {
           city: organizations.city,
           logoUrl: organizations.logoUrl,
         },
-        teamsCount: sql<number>`(SELECT count(*) FROM registrations WHERE edition_id = ${editions.id} AND status IN ('approved','pending'))::int`,
+        teamsCount: sql<number>`(SELECT count(*) FROM registrations WHERE edition_id = ${editions.id} AND status NOT IN ('rejected','withdrawn'))::int`,
       })
       .from(editions)
       .innerJoin(leagues, eq(leagues.id, editions.leagueId))
@@ -56,6 +57,7 @@ export class PublicEditionsService {
         slug: editions.slug,
         season: editions.season,
         status: editions.status,
+        registrationsOpen: editions.registrationsOpen,
         isPublished: editions.isPublished,
         maxTeams: editions.maxTeams,
         registrationFee: editions.registrationFee,
@@ -90,9 +92,9 @@ export class PublicEditionsService {
 
     if (!edition) throw new NotFoundException('Torneo no encontrado')
 
-    // If not published, only org members can see it
-    if (!edition.isPublished) {
-      if (!uid) throw new NotFoundException('Torneo no encontrado')
+    // Is the viewer a member of the organizing org? (organizers always see everything)
+    let isOrgMember = false
+    if (uid) {
       const [member] = await this.db
         .select({ id: organizationMembers.id })
         .from(organizationMembers)
@@ -102,7 +104,12 @@ export class PublicEditionsService {
             eq(organizationMembers.uid, uid),
           ),
         )
-      if (!member) throw new NotFoundException('Torneo no encontrado')
+      isOrgMember = !!member
+    }
+
+    // If not published, only org members can see it
+    if (!edition.isPublished && !isOrgMember) {
+      throw new NotFoundException('Torneo no encontrado')
     }
 
     const registeredTeams = await this.db
@@ -120,7 +127,7 @@ export class PublicEditionsService {
       .where(
         and(
           eq(registrations.editionId, edition.id),
-          inArray(registrations.status, ['approved', 'pending']),
+          notInArray(registrations.status, ['rejected', 'withdrawn']),
         ),
       )
 
@@ -139,11 +146,18 @@ export class PublicEditionsService {
     // Don't leak ownerUid to the response
     const { ownerUid, ...org } = edition.organization
 
+    // Privacy during sign-up: before the championship is under way, the public
+    // must not see which teams have registered. Organizers still see everything.
+    // The count stays visible so the page can show how many spots are taken.
+    const teamsHidden =
+      (edition.status === 'draft' || edition.status === 'registration') && !isOrgMember
+
     return {
       ...edition,
       organization: org,
-      teams: registeredTeams,
+      teams: teamsHidden ? [] : registeredTeams,
       teamsCount: registeredTeams.length,
+      teamsHidden,
       venues: orgVenues,
     }
   }

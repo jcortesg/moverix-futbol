@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common'
-import { and, asc, eq } from 'drizzle-orm'
+import { and, asc, eq, ne, notInArray } from 'drizzle-orm'
 import { DatabaseService } from '../../db/database.service'
 import {
   editions,
@@ -83,13 +83,7 @@ export type QualifiersResult = {
   reason?: string
 }
 
-type FormatConfigShape = {
-  type?: string
-  phase1?: { kind?: string; qualifiersPerGroup?: number }
-  phase2?:
-    | { kind?: 'knockout'; bracketSize?: number; hasRepechage?: boolean; hasThirdPlace?: boolean }
-    | { kind?: 'multi_cup'; cups?: { name: string; from: number; to: number; size: number }[] }
-}
+import { normalizeFormatConfig, findPhase } from '../../common/utils/format-config'
 
 @Injectable()
 export class StandingsService {
@@ -99,13 +93,64 @@ export class StandingsService {
     return this.database.db
   }
 
+  /**
+   * Valla menos vencida de TODO el torneo: grupos + eliminatoria (Copa A y B).
+   * No sale de la tabla de posiciones porque esa excluye a propósito la
+   * eliminatoria. Cuenta el marcador del partido; los penales de definición no
+   * son goles recibidos. Solo entran equipos que ya jugaron.
+   */
+  async getLeastConceded(editionId: string) {
+    const [regRows, matchRows] = await Promise.all([
+      this.db
+        .select({
+          teamId: teams.id,
+          teamName: teams.name,
+          teamLogoUrl: teams.logoUrl,
+          teamPrimaryColor: teams.primaryColor,
+        })
+        .from(registrations)
+        .innerJoin(teams, eq(teams.id, registrations.teamId))
+        .where(and(
+          eq(registrations.editionId, editionId),
+          notInArray(registrations.status, ['rejected', 'withdrawn']),
+        )),
+      this.db
+        .select({
+          homeTeamId: matches.homeTeamId,
+          awayTeamId: matches.awayTeamId,
+          homeScore: matches.homeScore,
+          awayScore: matches.awayScore,
+        })
+        .from(matches)
+        .innerJoin(matchdays, eq(matchdays.id, matches.matchdayId))
+        .where(and(eq(matchdays.editionId, editionId), eq(matches.status, 'finished'))),
+    ])
+
+    const rows = new Map(regRows.map((r) => [r.teamId, { ...r, played: 0, goalsAgainst: 0 }]))
+    for (const m of matchRows) {
+      const home = m.homeTeamId ? rows.get(m.homeTeamId) : undefined
+      const away = m.awayTeamId ? rows.get(m.awayTeamId) : undefined
+      if (home) { home.played++; home.goalsAgainst += m.awayScore ?? 0 }
+      if (away) { away.played++; away.goalsAgainst += m.homeScore ?? 0 }
+    }
+
+    return [...rows.values()]
+      .filter((r) => r.played > 0)
+      .sort((a, b) =>
+        a.goalsAgainst - b.goalsAgainst ||
+        b.played - a.played ||
+        a.teamName.localeCompare(b.teamName))
+      .map((r, i) => ({ position: i + 1, ...r }))
+  }
+
   async getForEdition(editionId: string): Promise<StandingGroup[]> {
     const [edition] = await this.db.select().from(editions).where(eq(editions.id, editionId))
     if (!edition) throw new NotFoundException(`Edición ${editionId} no encontrada`)
 
     const tb: TiebreakerRules = (edition.tiebreakerRules as TiebreakerRules | null) ?? DEFAULT_TB
-    const formatConfig = (edition.formatConfig ?? {}) as { phase1?: { qualifiersPerGroup?: number } }
-    const qualifiers = formatConfig.phase1?.qualifiersPerGroup ?? null
+    const formatConfig = normalizeFormatConfig(edition.formatConfig as Record<string, unknown>)
+    const groupsPhase = findPhase(formatConfig.phases, 'groups')
+    const qualifiers = (groupsPhase?.qualifiersPerGroup as number) ?? null
 
     // Load groups, registrations (with team info), and finished matches
     const [groupRows, regRows, matchRows] = await Promise.all([
@@ -129,7 +174,9 @@ export class StandingsService {
         .innerJoin(teams, eq(teams.id, registrations.teamId))
         .where(and(
           eq(registrations.editionId, editionId),
-          eq(registrations.status, 'approved'),
+          // Se muestran todos los equipos salvo los rechazados/retirados: así los
+          // equipos en draft/pending también figuran en la tabla (con 0 pts hasta jugar).
+          notInArray(registrations.status, ['rejected', 'withdrawn']),
         )),
       this.db
         .select({ match: matches })
@@ -138,6 +185,9 @@ export class StandingsService {
         .where(and(
           eq(matchdays.editionId, editionId),
           eq(matches.status, 'finished'),
+          // La eliminatoria se define por quién gana, no por puntos: sus
+          // partidos no deben mover la tabla de la fase de grupos.
+          ne(matchdays.phase, 'knockout'),
         )),
     ])
 
@@ -378,14 +428,17 @@ export class StandingsService {
     const [edition] = await this.db.select().from(editions).where(eq(editions.id, editionId))
     if (!edition) throw new NotFoundException(`Edición ${editionId} no encontrada`)
 
-    const cfg = (edition.formatConfig ?? {}) as FormatConfigShape
+    const cfg = normalizeFormatConfig(edition.formatConfig as Record<string, unknown>)
     const formatType = cfg.type ?? 'none'
     const standings = await this.getForEdition(editionId)
 
+    const cfgGroupsPhase = findPhase(cfg.phases, 'groups')
+    const cfgKnockoutPhase = findPhase(cfg.phases, 'knockout')
+    const cfgMultiCupPhase = findPhase(cfg.phases, 'multi_cup')
+
     if (formatType === 'groups_knockout') {
-      const phase2 = cfg.phase2 as { kind?: 'knockout'; bracketSize?: number } | undefined
-      const bracketSize = phase2?.bracketSize ?? 0
-      const qpg = cfg.phase1?.qualifiersPerGroup ?? 0
+      const bracketSize = (cfgKnockoutPhase?.bracketSize as number) ?? 0
+      const qpg = (cfgGroupsPhase?.qualifiersPerGroup as number) ?? 0
       if (!bracketSize || !qpg) {
         return { type: 'groups_knockout', bracketSize, qualifiers: [], totalSlots: bracketSize, reason: 'Configuración incompleta de fase 2.' }
       }
@@ -400,13 +453,32 @@ export class StandingsService {
         }
       }
 
-      // Build seed order: layer by position (1° of all groups → seed 1..N), then 2° → seed N+1..2N, etc.
+      // Orden de siembra. Dos criterios posibles:
+      //  - 'reclassification': una sola tabla con todos los equipos ordenada por
+      //    puntos (el mismo criterio de la pestaña Reclasificación). El 1° de un
+      //    grupo puede quedar detrás del 1° de otro si sumó menos.
+      //  - 'group_position' (por defecto): por capas — los 1° de cada grupo, luego
+      //    los 2°, y así. Conserva el comportamiento anterior.
+      const seeding = (cfgKnockoutPhase?.seeding as string) ?? 'group_position'
       const ordered: typeof candidates = []
-      for (let pos = 1; pos <= qpg; pos++) {
-        const layer = candidates.filter((c) => c.groupPosition === pos)
-        // Inside the layer keep group order (A, B, C, …)
-        layer.sort((a, b) => (a.groupCode ?? '').localeCompare(b.groupCode ?? ''))
-        ordered.push(...layer)
+
+      if (seeding === 'reclassification') {
+        ordered.push(
+          ...[...candidates].sort(
+            (a, b) =>
+              b.teamRow.points - a.teamRow.points ||
+              b.teamRow.goalDiff - a.teamRow.goalDiff ||
+              b.teamRow.goalsFor - a.teamRow.goalsFor ||
+              a.teamRow.teamName.localeCompare(b.teamRow.teamName),
+          ),
+        )
+      } else {
+        for (let pos = 1; pos <= qpg; pos++) {
+          const layer = candidates.filter((c) => c.groupPosition === pos)
+          // Inside the layer keep group order (A, B, C, …)
+          layer.sort((a, b) => (a.groupCode ?? '').localeCompare(b.groupCode ?? ''))
+          ordered.push(...layer)
+        }
       }
 
       const slots = bracketSize
@@ -428,8 +500,7 @@ export class StandingsService {
     }
 
     if (formatType === 'groups_multi_cup') {
-      const phase2 = cfg.phase2 as { kind?: 'multi_cup'; cups?: { name: string; from: number; to: number; size: number }[] } | undefined
-      const cups = phase2?.cups ?? []
+      const cups = (cfgMultiCupPhase?.cups as { name: string; from: number; to: number; size: number }[]) ?? []
       if (cups.length === 0) {
         return { type: 'groups_multi_cup', bracketSize: null, qualifiers: [], totalSlots: 0, reason: 'No hay copas configuradas.' }
       }
@@ -481,8 +552,7 @@ export class StandingsService {
     }
 
     if (formatType === 'round_robin_playoffs') {
-      const phase2 = cfg.phase2 as { kind?: 'knockout'; bracketSize?: number } | undefined
-      const bracketSize = phase2?.bracketSize ?? 0
+      const bracketSize = (cfgKnockoutPhase?.bracketSize as number) ?? 0
       if (!bracketSize) {
         return { type: 'round_robin_playoffs', bracketSize, qualifiers: [], totalSlots: 0, reason: 'Configuración incompleta.' }
       }

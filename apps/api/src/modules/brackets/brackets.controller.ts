@@ -5,7 +5,9 @@ import {
 import { ApiBearerAuth, ApiQuery, ApiTags } from '@nestjs/swagger'
 import { BracketsService } from './brackets.service'
 import { OwnershipService } from '../../common/services/ownership.service'
-import { GenerateBracketDto } from './dto/generate-bracket.dto'
+import {
+  GenerateBracketDto, GenerateConsolationDto, GenerateManualDto,
+} from './dto/generate-bracket.dto'
 
 @ApiTags('brackets')
 @ApiBearerAuth()
@@ -20,6 +22,31 @@ export class BracketsController {
   async generate(@Body() dto: GenerateBracketDto, @Request() req: { user: { uid: string } }) {
     await this.ownership.verifyEdition(req.user.uid, dto.editionId)
     return this.service.generate(dto.editionId, dto.cupName)
+  }
+
+  /** Cuadro sorteado fuera del sistema: los equipos se cargan uno por uno. */
+  @Post('generate-manual')
+  async generateManual(
+    @Body() dto: GenerateManualDto,
+    @Request() req: { user: { uid: string } },
+  ) {
+    await this.ownership.verifyEdition(req.user.uid, dto.editionId)
+    return this.service.generateManual(dto.editionId, dto.cupName ?? 'main', dto.matchups)
+  }
+
+  /** Copa que se llena con los perdedores de otra, no con la tabla de grupos. */
+  @Post('generate-consolation')
+  async generateConsolation(
+    @Body() dto: GenerateConsolationDto,
+    @Request() req: { user: { uid: string } },
+  ) {
+    await this.ownership.verifyEdition(req.user.uid, dto.editionId)
+    return this.service.generateConsolation(
+      dto.editionId,
+      dto.cupName,
+      dto.sourceCup ?? 'main',
+      dto.sourceRound ?? 1,
+    )
   }
 
   @Get()

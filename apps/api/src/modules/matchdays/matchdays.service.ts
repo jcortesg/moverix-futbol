@@ -1,7 +1,7 @@
-import { Injectable, NotFoundException } from '@nestjs/common'
-import { asc, eq } from 'drizzle-orm'
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
+import { asc, eq, inArray } from 'drizzle-orm'
 import { DatabaseService } from '../../db/database.service'
-import { matchdays } from '../../db/schema'
+import { matchdays, matches, matchEvents } from '../../db/schema'
 import { CreateMatchdayDto } from './dto/create-matchday.dto'
 import { UpdateMatchdayDto } from './dto/update-matchday.dto'
 
@@ -55,8 +55,43 @@ export class MatchdaysService {
     return updated
   }
 
+  /**
+   * Borrar una jornada arrastra en cascada sus partidos y, con ellos, todos los
+   * goles, tarjetas y sustituciones. Solo se permite cuando ningún partido de la
+   * jornada llegó a jugarse; para el resto hay que mover o cancelar los partidos
+   * primero.
+   */
   async remove(id: string) {
     await this.findOne(id)
+
+    const rows = await this.db
+      .select({ id: matches.id, status: matches.status, homeScore: matches.homeScore })
+      .from(matches)
+      .where(eq(matches.matchdayId, id))
+
+    const PLAYED: string[] = ['finished', 'live', 'walkover']
+    const played = rows.filter((m) => PLAYED.includes(m.status) || m.homeScore != null)
+
+    if (played.length) {
+      throw new BadRequestException(
+        `Esta jornada tiene ${played.length} partido(s) ya jugados. Muévelos a otra jornada o cancélalos antes de eliminarla.`,
+      )
+    }
+
+    if (rows.length) {
+      const withEvents = await this.db
+        .select({ matchId: matchEvents.matchId })
+        .from(matchEvents)
+        .where(inArray(matchEvents.matchId, rows.map((m) => m.id)))
+        .limit(1)
+
+      if (withEvents.length) {
+        throw new BadRequestException(
+          'Esta jornada tiene partidos con eventos registrados. Muévelos a otra jornada antes de eliminarla.',
+        )
+      }
+    }
+
     await this.db.delete(matchdays).where(eq(matchdays.id, id))
     return { id }
   }

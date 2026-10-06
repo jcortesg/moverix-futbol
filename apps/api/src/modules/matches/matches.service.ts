@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common'
-import { and, asc, eq, inArray } from 'drizzle-orm'
+import * as admin from 'firebase-admin'
+import { and, asc, count, eq, inArray, ne } from 'drizzle-orm'
 import { DatabaseService } from '../../db/database.service'
 import {
   bracketSlots,
@@ -7,19 +8,29 @@ import {
   groups,
   matchdays,
   matches,
+  matchDelegates,
+  matchEvents,
+  referees,
   registrations,
+  teams,
 } from '../../db/schema'
 import { BracketsService } from '../brackets/brackets.service'
 import { PlayerStatsService } from '../player-stats/player-stats.service'
 import { SocialPostsService } from '../social/social-posts.service'
+import { MobileNotificationsService } from '../mobile/mobile-notifications.service'
 import { CreateMatchDto } from './dto/create-match.dto'
 import { UpdateMatchDto } from './dto/update-match.dto'
 import { FinalizeMatchDto } from './dto/finalize-match.dto'
 import { GenerateFixtureDto } from './dto/generate-fixture.dto'
 
-type FormatConfigShape = {
-  phase1?: { kind?: string; doubleLeg?: boolean }
-}
+import { normalizeFormatConfig, findPhase } from '../../common/utils/format-config'
+
+/**
+ * Zona horaria en la que se muestran las horas de partido en los textos que
+ * genera el servidor (notificaciones). Cloud Run corre en UTC, asi que sin
+ * esto los horarios salen corridos 5 horas.
+ */
+const MATCH_TIME_ZONE = process.env.MATCH_TIME_ZONE ?? 'America/Bogota'
 
 @Injectable()
 export class MatchesService {
@@ -30,7 +41,17 @@ export class MatchesService {
     private readonly bracketsService: BracketsService,
     private readonly playerStatsService: PlayerStatsService,
     private readonly socialPostsService: SocialPostsService,
+    private readonly notifications: MobileNotificationsService,
   ) {}
+
+  /** Nombres de dos equipos por id (para los textos de notificación). */
+  private async teamNames(homeId: string | null, awayId: string | null) {
+    const ids = [homeId, awayId].filter(Boolean) as string[]
+    if (!ids.length) return { home: 'Local', away: 'Visitante' }
+    const rows = await this.db.select({ id: teams.id, name: teams.name }).from(teams).where(inArray(teams.id, ids))
+    const byId = new Map(rows.map((r) => [r.id, r.name]))
+    return { home: byId.get(homeId ?? '') ?? 'Local', away: byId.get(awayId ?? '') ?? 'Visitante' }
+  }
 
   private get db() {
     return this.database.db
@@ -51,6 +72,35 @@ export class MatchesService {
         round: dto.round,
       })
       .returning()
+
+    await this.syncRefereeAsDelegate(row.id, dto.refereeId)
+
+    // Notificar a ambos equipos que tienen partido programado (best-effort).
+    try {
+      const { home, away } = await this.teamNames(row.homeTeamId, row.awayTeamId)
+      // OJO: el servidor corre en UTC. Sin timeZone explicito, toLocaleString
+      // formatea la hora UTC y la notificacion muestra 11:30 en vez de 06:30.
+      const when = row.scheduledAt
+        ? new Date(row.scheduledAt).toLocaleString('es-CO', {
+            timeZone: MATCH_TIME_ZONE,
+            weekday: 'short',
+            day: '2-digit',
+            month: 'short',
+            hour: '2-digit',
+            minute: '2-digit',
+          })
+        : null
+      const payload = {
+        type: 'match' as const,
+        title: 'Nuevo partido programado',
+        body: `${home} vs ${away}${when ? ` · ${when}` : ''}`,
+        data: { kind: 'match', matchId: row.id },
+      }
+      if (row.homeTeamId) await this.notifications.notifyTeam(row.homeTeamId, payload)
+      if (row.awayTeamId) await this.notifications.notifyTeam(row.awayTeamId, payload)
+    } catch (err) {
+      this.logger.warn(`notify create match: ${err}`)
+    }
     return row
   }
 
@@ -77,8 +127,55 @@ export class MatchesService {
     return row
   }
 
+  /**
+   * Si el partido tiene arbitro asignado y esa persona tiene correo, se agrega
+   * tambien a la terna (match_delegates) para que pueda dirigir desde la web.
+   * Best-effort: nunca bloquea la edicion del partido.
+   */
+  private async syncRefereeAsDelegate(matchId: string, refereeId: string | null | undefined) {
+    if (!refereeId) return
+    try {
+      const [ref] = await this.db
+        .select({ fullName: referees.fullName, email: referees.email })
+        .from(referees)
+        .where(eq(referees.id, refereeId))
+      if (!ref?.email) return
+
+      const email = ref.email.trim().toLowerCase()
+      let uid: string | null = null
+      try {
+        uid = (await admin.auth().getUserByEmail(email)).uid
+      } catch {
+        // Aun no tiene cuenta: queda pendiente y se vincula al registrarse.
+      }
+
+      await this.db
+        .insert(matchDelegates)
+        .values({
+          matchId,
+          uid,
+          pendingEmail: uid ? null : email,
+          invitedName: ref.fullName,
+          // Se registra como delegado: es quien lleva la planilla en cancha.
+          // El puesto en la terna se ajusta desde el panel si hace falta.
+          role: 'delegate',
+        })
+        .onConflictDoNothing()
+    } catch (err) {
+      this.logger.warn(`sync referee as delegate: ${err}`)
+    }
+  }
+
   async update(id: string, dto: UpdateMatchDto) {
-    await this.findOne(id)
+    const current = await this.findOne(id)
+
+    // Mover de jornada exige validar antes: una vez movido, la tabla y el
+    // calendario se recalculan sobre la jornada nueva.
+    let roundPatch: { round: string } | null = null
+    if (dto.matchdayId && dto.matchdayId !== current.matchdayId) {
+      roundPatch = await this.assertMatchdayMove(current, dto.matchdayId)
+    }
+
     const { scheduledAt, ...rest } = dto
     const [updated] = await this.db
       .update(matches)
@@ -88,15 +185,102 @@ export class MatchesService {
         ...(scheduledAt !== undefined && {
           scheduledAt: scheduledAt ? new Date(scheduledAt) : null,
         }),
+        // `round` es texto copiado del nombre de la jornada: al mover, se
+        // actualiza o quedaría mostrando la jornada anterior.
+        ...(roundPatch ?? {}),
         updatedAt: new Date(),
       })
       .where(eq(matches.id, id))
       .returning()
+
+    if (dto.refereeId !== undefined) {
+      await this.syncRefereeAsDelegate(id, dto.refereeId)
+    }
     return updated
   }
 
+  /**
+   * Valida que el partido pueda pasar a `targetMatchdayId` y devuelve el `round`
+   * que le corresponde en la jornada destino.
+   */
+  private async assertMatchdayMove(
+    current: { id: string; matchdayId: string; homeTeamId: string | null; awayTeamId: string | null; status: string },
+    targetMatchdayId: string,
+  ) {
+    const [origin] = await this.db
+      .select({ editionId: matchdays.editionId })
+      .from(matchdays)
+      .where(eq(matchdays.id, current.matchdayId))
+
+    const [target] = await this.db
+      .select({ editionId: matchdays.editionId, number: matchdays.number, name: matchdays.name })
+      .from(matchdays)
+      .where(eq(matchdays.id, targetMatchdayId))
+
+    if (!target) throw new NotFoundException('La jornada destino no existe.')
+
+    // Mover entre ediciones rompería la tabla de posiciones de ambas.
+    if (origin && target.editionId !== origin.editionId) {
+      throw new BadRequestException('No puedes mover un partido a la jornada de otro campeonato.')
+    }
+
+    // Un equipo no puede jugar dos veces en la misma jornada.
+    const teamIds = [current.homeTeamId, current.awayTeamId].filter((t): t is string => !!t)
+    if (teamIds.length) {
+      const rivals = await this.db
+        .select({ homeTeamId: matches.homeTeamId, awayTeamId: matches.awayTeamId })
+        .from(matches)
+        .where(and(eq(matches.matchdayId, targetMatchdayId), ne(matches.id, current.id)))
+
+      const busy = new Set(rivals.flatMap((r) => [r.homeTeamId, r.awayTeamId]).filter(Boolean))
+      const clash = teamIds.find((t) => busy.has(t))
+      if (clash) {
+        const [team] = await this.db
+          .select({ name: teams.name })
+          .from(teams)
+          .where(eq(teams.id, clash))
+        throw new BadRequestException(
+          `${team?.name ?? 'Un equipo'} ya tiene un partido en esa jornada.`,
+        )
+      }
+    }
+
+    return { round: target.name ?? `Jornada ${target.number}` }
+  }
+
+  /**
+   * Borrar un partido con historial destruye sus goles, tarjetas y sustituciones
+   * (match_events cuelga en cascada) y deja multas huérfanas. Por eso solo se
+   * permite borrar los que nunca se jugaron: para el resto está `cancelled`,
+   * que conserva la fila y sus eventos pero lo saca de la tabla de posiciones.
+   */
   async remove(id: string) {
-    await this.findOne(id)
+    const match = await this.findOne(id)
+
+    const PLAYED: string[] = ['finished', 'live', 'walkover']
+    if (PLAYED.includes(match.status)) {
+      throw new BadRequestException(
+        'Este partido ya se jugó y no se puede eliminar. Cámbialo a "Cancelado" o "Aplazado": conserva el registro y sale de la tabla de posiciones.',
+      )
+    }
+
+    if (match.homeScore != null || match.awayScore != null) {
+      throw new BadRequestException(
+        'Este partido tiene resultado registrado y no se puede eliminar. Cámbialo a "Cancelado" para conservar el historial.',
+      )
+    }
+
+    const [{ total }] = await this.db
+      .select({ total: count() })
+      .from(matchEvents)
+      .where(eq(matchEvents.matchId, id))
+
+    if (Number(total) > 0) {
+      throw new BadRequestException(
+        `Este partido tiene ${total} evento(s) registrados (goles, tarjetas o cambios) y no se puede eliminar. Cámbialo a "Cancelado" para conservarlos.`,
+      )
+    }
+
     await this.db.delete(matches).where(eq(matches.id, id))
     return { id }
   }
@@ -165,6 +349,21 @@ export class MatchesService {
       this.logger.warn(`Social post failed for finalized match ${id}: ${err}`)
     }
 
+    // Notificar el resultado final a ambos equipos (best-effort).
+    try {
+      const { home, away } = await this.teamNames(updated.homeTeamId, updated.awayTeamId)
+      const payload = {
+        type: 'result' as const,
+        title: 'Resultado final',
+        body: `${home} ${updated.homeScore} - ${updated.awayScore} ${away}`,
+        data: { kind: 'match', matchId: updated.id },
+      }
+      if (updated.homeTeamId) await this.notifications.notifyTeam(updated.homeTeamId, payload)
+      if (updated.awayTeamId) await this.notifications.notifyTeam(updated.awayTeamId, payload)
+    } catch (err) {
+      this.logger.warn(`notify finalize match: ${err}`)
+    }
+
     return updated
   }
 
@@ -178,9 +377,9 @@ export class MatchesService {
     const [edition] = await this.db.select().from(editions).where(eq(editions.id, dto.editionId))
     if (!edition) throw new NotFoundException(`Edición ${dto.editionId} no encontrada`)
 
-    const cfg = (edition.formatConfig ?? {}) as FormatConfigShape
-    const phase1 = cfg.phase1
-    if (!phase1 || phase1.kind !== 'groups') {
+    const cfg = normalizeFormatConfig(edition.formatConfig as Record<string, unknown>)
+    const groupsPhase = findPhase(cfg.phases, 'groups')
+    if (!groupsPhase) {
       throw new BadRequestException(
         'Solo se soporta generación automática para fase de grupos por ahora.',
       )
@@ -206,6 +405,22 @@ export class MatchesService {
       )
     }
     if (existingMatchdays.length > 0 && dto.force) {
+      // Nunca regenerar si ya hay partidos jugados: se perderían resultados,
+      // match_events y player_stats. El organizador debe gestionar a mano.
+      const [played] = await this.db
+        .select({ id: matches.id })
+        .from(matches)
+        .where(and(
+          inArray(matches.matchdayId, existingMatchdays.map((m) => m.id)),
+          // Un W.O. también deja resultado, y un partido en vivo se perdería a medias.
+          inArray(matches.status, ['finished', 'live', 'walkover']),
+        ))
+        .limit(1)
+      if (played) {
+        throw new BadRequestException(
+          'Hay partidos ya jugados en este torneo. No se puede regenerar el fixture (se perderían los resultados). Gestiona las jornadas manualmente.',
+        )
+      }
       // Delete matches first (CASCADE on matchday will cover but be explicit)
       await this.db.delete(matches).where(
         inArray(matches.matchdayId, existingMatchdays.map((m) => m.id)),
@@ -238,7 +453,7 @@ export class MatchesService {
 
       if (teamIds.length < 2) continue
 
-      const rounds = bergerRounds(teamIds, phase1.doubleLeg ?? false)
+      const rounds = bergerRounds(teamIds, (groupsPhase.doubleLeg as boolean) ?? false)
       maxRoundNumber = Math.max(maxRoundNumber, rounds.length)
       rounds.forEach((pairings, idx) => {
         allRounds.push({ groupId: g.id, roundNumber: idx + 1, pairings })

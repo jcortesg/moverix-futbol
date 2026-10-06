@@ -4,8 +4,25 @@ import * as fs from 'fs'
 
 const LOCAL_UPLOADS_DIR = path.join(process.cwd(), 'uploads')
 
+// Prefijo reservado para archivos sensibles (documentos de identidad).
+// El UploadsController público rechaza este prefijo: solo se sirven por
+// endpoints autenticados que verifican propiedad.
+export const PRIVATE_PREFIX = 'private'
+
 function isProduction(): boolean {
   return process.env.NODE_ENV === 'production'
+}
+
+function contentTypeFromExt(filePath: string): string {
+  switch (path.extname(filePath).toLowerCase()) {
+    case '.pdf': return 'application/pdf'
+    case '.png': return 'image/png'
+    case '.jpg':
+    case '.jpeg': return 'image/jpeg'
+    case '.webp': return 'image/webp'
+    case '.heic': return 'image/heic'
+    default: return 'application/octet-stream'
+  }
 }
 
 function localBaseUrl(): string {
@@ -52,6 +69,66 @@ export class StorageService {
     }
   }
 
+  // ── Archivos privados (documentos sensibles) ──────────────────────────────
+  // Devuelven/usan una CLAVE de almacenamiento, no una URL pública. El archivo
+  // queda bajo el prefijo PRIVATE_PREFIX, que el proxy público rechaza.
+
+  /** Sube un archivo privado y devuelve su clave de almacenamiento. */
+  async uploadPrivateDocument(entityPath: string, file: Express.Multer.File, label = 'doc'): Promise<string> {
+    const ext = path.extname(file.originalname).toLowerCase() || '.bin'
+    const filename = `${label}-${Date.now()}${ext}`
+    const key = `${PRIVATE_PREFIX}/${entityPath}/${filename}`
+
+    if (!isProduction()) {
+      const abs = path.join(LOCAL_UPLOADS_DIR, key)
+      fs.mkdirSync(path.dirname(abs), { recursive: true })
+      fs.writeFileSync(abs, file.buffer)
+      return key
+    }
+
+    try {
+      const { Storage } = await import('@google-cloud/storage')
+      const storage = new Storage()
+      const bucket = process.env.GCS_BUCKET ?? 'moverix-assets'
+      await storage.bucket(bucket).file(key).save(file.buffer, {
+        contentType: file.mimetype,
+        resumable: false,
+      })
+      return key
+    } catch (err) {
+      throw new InternalServerErrorException(
+        'Error al subir documento: ' + (err as Error).message,
+      )
+    }
+  }
+
+  /** Lee un documento privado por su clave (dev: disco local; prod: GCS). */
+  async streamPrivate(key: string): Promise<{ buffer: Buffer; contentType: string }> {
+    if (!isProduction()) {
+      const abs = path.join(LOCAL_UPLOADS_DIR, key)
+      const buffer = fs.readFileSync(abs)
+      return { buffer, contentType: contentTypeFromExt(key) }
+    }
+    return this.streamFromGcs(key)
+  }
+
+  /** Borra un documento privado por su clave. Best-effort. */
+  async deletePrivate(key: string): Promise<void> {
+    if (!key) return
+    if (!isProduction()) {
+      try { fs.rmSync(path.join(LOCAL_UPLOADS_DIR, key), { force: true }) } catch { /* best-effort */ }
+      return
+    }
+    try {
+      const { Storage } = await import('@google-cloud/storage')
+      const storage = new Storage()
+      const bucket = process.env.GCS_BUCKET ?? 'moverix-assets'
+      await storage.bucket(bucket).file(key).delete({ ignoreNotFound: true })
+    } catch {
+      // best-effort
+    }
+  }
+
   /**
    * Descarga un archivo de GCS y devuelve su contenido + contentType.
    * Usado por el UploadsController para servir imágenes públicamente.
@@ -75,7 +152,7 @@ export class StorageService {
     file: Express.Multer.File,
   ): Promise<string> {
     const ext = path.extname(file.originalname).toLowerCase() || '.jpg'
-    const filename = `${type}${ext}`
+    const filename = `${type}-${Date.now()}${ext}`
 
     if (!isProduction()) {
       return this.saveLocally(entityPath, filename, file)

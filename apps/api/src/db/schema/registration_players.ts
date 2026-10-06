@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, integer, boolean, timestamp, date, uniqueIndex } from 'drizzle-orm/pg-core'
+import { pgTable, uuid, varchar, integer, boolean, timestamp, date, text, uniqueIndex } from 'drizzle-orm/pg-core'
 import { sql } from 'drizzle-orm'
 import { registrations } from './registrations'
 import { playerPositionEnum } from './player_profiles'
@@ -23,15 +23,24 @@ export const registrationPlayers = pgTable(
     jerseyNumber: integer('jersey_number'),
     position: playerPositionEnum('position'),
     isCaptain: boolean('is_captain').notNull().default(false),
+    // Claves de almacenamiento privadas (no URLs públicas).
+    docFileUrl: text('doc_file_url'),
+    photoFileUrl: text('photo_file_url'),
+    emergencyContactName: varchar('emergency_contact_name', { length: 120 }),
+    emergencyContactPhone: varchar('emergency_contact_phone', { length: 40 }),
     addedAt: timestamp('added_at', { withTimezone: true }).notNull().defaultNow(),
+    // Baja logica: la fila nunca se borra, se marca. Conserva documento, foto y
+    // dorsal, y mantiene al jugador ligado a sus goles del torneo.
+    removedAt: timestamp('removed_at', { withTimezone: true }),
+    removedBy: varchar('removed_by', { length: 128 }),
   },
   (t) => ({
     registrationPlayerUnique: uniqueIndex('registration_players_reg_uid_unique').on(t.registrationId, t.playerUid),
     registrationEmailUnique: uniqueIndex('registration_players_reg_email_unique')
       .on(t.registrationId, t.email)
-      .where(sql`${t.email} IS NOT NULL`),
+      .where(sql`${t.email} IS NOT NULL AND ${t.removedAt} IS NULL`),
     registrationDocUnique: uniqueIndex('registration_players_reg_doc_unique')
       .on(t.registrationId, t.docNumber)
-      .where(sql`${t.docNumber} IS NOT NULL`),
+      .where(sql`${t.docNumber} IS NOT NULL AND ${t.removedAt} IS NULL`),
   }),
 )

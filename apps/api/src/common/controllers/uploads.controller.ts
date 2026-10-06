@@ -1,7 +1,7 @@
 import { Controller, Get, Req, Res, NotFoundException } from '@nestjs/common'
 import type { Request, Response } from 'express'
 import { Public } from '../decorators/public.decorator'
-import { StorageService } from '../services/storage.service'
+import { StorageService, PRIVATE_PREFIX } from '../services/storage.service'
 
 @Controller('uploads')
 export class UploadsController {
@@ -15,6 +15,12 @@ export class UploadsController {
 
     if (!gcsPath) {
       throw new NotFoundException('Ruta de archivo requerida')
+    }
+
+    // Los archivos privados (documentos de identidad) NUNCA se sirven por el
+    // proxy público — solo por endpoints autenticados con verificación de dueño.
+    if (gcsPath === PRIVATE_PREFIX || gcsPath.startsWith(`${PRIVATE_PREFIX}/`)) {
+      throw new NotFoundException('Archivo no encontrado')
     }
 
     if (process.env.NODE_ENV !== 'production') {

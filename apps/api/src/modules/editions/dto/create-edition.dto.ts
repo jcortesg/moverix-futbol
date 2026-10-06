@@ -1,4 +1,5 @@
 import {
+  IsArray,
   IsInt,
   IsISO8601,
   IsObject,
@@ -66,6 +67,24 @@ export class CreateEditionDto {
   @IsOptional()
   @IsUrl()
   rulesUrl?: string
+
+  @ApiProperty({ required: false, description: 'Mínimo de jugadores por equipo para inscribirse' })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  minPlayersPerTeam?: number
+
+  @ApiProperty({ required: false, description: 'Máximo de jugadores por equipo' })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  maxPlayersPerTeam?: number
+
+  @ApiProperty({ required: false, type: [String], description: 'Campos del jugador obligatorios en la inscripción' })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  requiredPlayerFields?: string[]
 
   @ApiProperty({ description: 'Configuración del formato (JSON)' })
   @IsObject()

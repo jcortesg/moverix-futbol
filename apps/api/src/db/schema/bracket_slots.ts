@@ -16,6 +16,8 @@ export const bracketSlots = pgTable('bracket_slots', {
   awayTeamId: uuid('away_team_id').references(() => teams.id, { onDelete: 'set null' }),
   winnerId: uuid('winner_id').references(() => teams.id, { onDelete: 'set null' }),
   nextSlotId: uuid('next_slot_id'),
+  // Copa de consolación: a dónde baja el que pierde. NULL = queda eliminado.
+  loserNextSlotId: uuid('loser_next_slot_id'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 })

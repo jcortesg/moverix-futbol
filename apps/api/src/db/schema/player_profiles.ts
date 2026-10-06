@@ -20,6 +20,8 @@ export const playerProfiles = pgTable('player_profiles', {
   username: varchar('username', { length: 40 }).notNull().unique(),
   fullName: varchar('full_name', { length: 120 }).notNull(),
   docNumber: varchar('doc_number', { length: 40 }),
+  /** Telefono de contacto; se pide en el registro y prefila la inscripcion. */
+  phone: varchar('phone', { length: 40 }),
   avatarUrl: text('avatar_url'),
   bio: text('bio'),
   city: varchar('city', { length: 100 }),
@@ -27,8 +29,14 @@ export const playerProfiles = pgTable('player_profiles', {
   position: playerPositionEnum('position'),
   preferredFoot: varchar('preferred_foot', { length: 5 }),
   birthYear: integer('birth_year'),
+  // Redes sociales (solo el usuario/handle, sin URL).
+  instagram: varchar('instagram', { length: 40 }),
+  tiktok: varchar('tiktok', { length: 40 }),
+  facebook: varchar('facebook', { length: 80 }),
+  twitter: varchar('twitter', { length: 40 }),
   followersCount: integer('followers_count').notNull().default(0),
   followingCount: integer('following_count').notNull().default(0),
+  deactivatedAt: timestamp('deactivated_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 })

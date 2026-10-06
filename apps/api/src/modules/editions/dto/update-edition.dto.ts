@@ -27,9 +27,33 @@ export class UpdateEditionDto extends PartialType(CreateEditionDto) {
   @IsBoolean()
   isPublished?: boolean
 
+  @ApiProperty({ description: 'Inscripciones abiertas/cerradas (independiente del status)', required: false })
+  @IsOptional()
+  @IsBoolean()
+  registrationsOpen?: boolean
+
+  @ApiProperty({
+    description: 'Cierre GENERAL de nominas: bloquea la edicion de plantillas de TODOS los equipos',
+    required: false,
+  })
+  @IsOptional()
+  @IsBoolean()
+  rostersLocked?: boolean
+
   @ApiProperty({ description: 'Descripcion publica del torneo (max 2000 chars)', required: false })
   @IsOptional()
   @IsString()
   @MaxLength(2000)
   publicDescription?: string
+
+  @ApiProperty({
+    description:
+      'Multas y sanciones de este torneo. Claves opcionales: redCard, yellowAccumulation, ' +
+      'yellowsForAccumulation, redCardMatchesBanned, yellowAccumulationMatchesBanned, ' +
+      'redCardSanction, yellowAccumulationSanction. Lo que falte usa el valor por defecto.',
+    required: false,
+  })
+  @IsOptional()
+  @IsObject()
+  fineDefaults?: Record<string, unknown>
 }

@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common'
 import { and, asc, eq } from 'drizzle-orm'
 import { DatabaseService } from '../../db/database.service'
+import { StorageService } from '../../common/services/storage.service'
 import {
   teams,
   teamMembers,
@@ -17,12 +18,54 @@ import {
   playerProfiles,
 } from '../../db/schema'
 
+const ALLOWED_DOC_MIME = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'image/heic']
+
 @Injectable()
 export class PublicTeamsService {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    private readonly storage: StorageService,
+  ) {}
 
   private get db() {
     return this.database.db
+  }
+
+  /** Datos mínimos del equipo para la landing de invitación (lookup por código). */
+  async getTeamByCode(code: string) {
+    const accessCode = (code ?? '').toUpperCase().trim()
+    if (!accessCode) throw new NotFoundException('Código no válido')
+
+    // 1) Código de invitación de EQUIPO (teams.access_code)
+    const [team] = await this.db
+      .select({
+        name: teams.name,
+        accessCode: teams.accessCode,
+        logoUrl: teams.logoUrl,
+        city: teams.city,
+        primaryColor: teams.primaryColor,
+      })
+      .from(teams)
+      .where(eq(teams.accessCode, accessCode))
+    if (team) return { ...team, editionName: null as string | null }
+
+    // 2) Código de invitación de INSCRIPCIÓN (registrations.invite_code) → mismo
+    //    formato de landing; al ingresarlo en la app entra directo a la nómina del campeonato.
+    const [reg] = await this.db
+      .select({
+        name: teams.name,
+        logoUrl: teams.logoUrl,
+        city: teams.city,
+        primaryColor: teams.primaryColor,
+        editionName: editions.name,
+      })
+      .from(registrations)
+      .innerJoin(teams, eq(teams.id, registrations.teamId))
+      .innerJoin(editions, eq(editions.id, registrations.editionId))
+      .where(eq(registrations.inviteCode, accessCode))
+    if (reg) return { ...reg, accessCode }
+
+    throw new NotFoundException('Invitación no válida')
   }
 
   /** Public team info for the invite page */
@@ -268,10 +311,15 @@ export class PublicTeamsService {
       firstName?: string
       lastName?: string
       docNumber?: string
+      birthDate?: string
+      employer?: string
+      healthProvider?: string
       phone?: string
       email?: string
       position?: string
       jerseyNumber?: number
+      emergencyContactName?: string
+      emergencyContactPhone?: string
     },
   ) {
     await this.verifyDirector(uid, dto.registrationId)
@@ -282,11 +330,53 @@ export class PublicTeamsService {
       firstName: dto.firstName,
       lastName: dto.lastName,
       docNumber: dto.docNumber,
+      birthDate: dto.birthDate,
+      employer: dto.employer,
+      healthProvider: dto.healthProvider,
       phone: dto.phone,
       email: dto.email,
       position: dto.position as any,
       jerseyNumber: dto.jerseyNumber,
+      emergencyContactName: dto.emergencyContactName,
+      emergencyContactPhone: dto.emergencyContactPhone,
     }).returning()
     return row
+  }
+
+  /** Verify the user is the director of the team that owns this roster player */
+  private async verifyDirectorForPlayer(uid: string, playerId: string) {
+    const [player] = await this.db
+      .select({ registrationId: registrationPlayers.registrationId, docFileUrl: registrationPlayers.docFileUrl })
+      .from(registrationPlayers)
+      .where(eq(registrationPlayers.id, playerId))
+    if (!player) throw new NotFoundException('Jugador no encontrado')
+    await this.verifyDirector(uid, player.registrationId)
+    return player
+  }
+
+  /** Upload a player's ID document (cédula) — director only */
+  async uploadPlayerDocumentForDirector(uid: string, playerId: string, file: Express.Multer.File) {
+    if (!file) throw new BadRequestException('Archivo requerido')
+    if (!ALLOWED_DOC_MIME.includes(file.mimetype)) {
+      throw new BadRequestException('Formato no permitido. Usa PDF, JPG, PNG, WEBP o HEIC.')
+    }
+    const player = await this.verifyDirectorForPlayer(uid, playerId)
+    const key = await this.storage.uploadPrivateDocument(`registration-players/${playerId}`, file)
+    if (player.docFileUrl && player.docFileUrl !== key) {
+      await this.storage.deletePrivate(player.docFileUrl)
+    }
+    const [updated] = await this.db
+      .update(registrationPlayers)
+      .set({ docFileUrl: key })
+      .where(eq(registrationPlayers.id, playerId))
+      .returning()
+    return updated
+  }
+
+  /** Stream a player's ID document — director only */
+  async getPlayerDocumentForDirector(uid: string, playerId: string) {
+    const player = await this.verifyDirectorForPlayer(uid, playerId)
+    if (!player.docFileUrl) throw new NotFoundException('Este jugador no tiene documento adjunto')
+    return this.storage.streamPrivate(player.docFileUrl)
   }
 }

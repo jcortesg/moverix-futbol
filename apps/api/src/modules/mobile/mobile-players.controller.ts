@@ -27,17 +27,35 @@ export class MobilePlayersController {
     return this.service.updateProfile(req.user.uid, dto)
   }
 
+  /** Inscripciones en borrador con datos requeridos pendientes del jugador */
+  @Get('me/pending-data')
+  myPendingData(@Req() req: any) {
+    return this.service.myPendingData(req.user.uid)
+  }
+
+  /** Partido en vivo o próximo por cada equipo del usuario (tarjeta del inicio) */
+  @Get('me/upcoming')
+  myUpcoming(@Req() req: any) {
+    return this.service.myUpcomingMatches(req.user.uid)
+  }
+
   /** Upload avatar photo */
   @Post('me/avatar')
   @ApiConsumes('multipart/form-data')
   @ApiBody({ schema: { type: 'object', properties: { file: { type: 'string', format: 'binary' } } } })
-  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } }))
+  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } }))
   uploadAvatar(@Req() req: any, @UploadedFile() file: Express.Multer.File) {
     return this.service.uploadAvatar(req.user.uid, file)
   }
 
-  /** Delete my account */
-  @Delete('me/account')
+  /** Deactivate my account (soft delete) */
+  @Post('me/deactivate')
+  deactivateAccount(@Req() req: any) {
+    return this.service.deactivateAccount(req.user.uid)
+  }
+
+  /** Permanently delete my account and personal data */
+  @Delete('me')
   deleteAccount(@Req() req: any) {
     return this.service.deleteAccount(req.user.uid)
   }

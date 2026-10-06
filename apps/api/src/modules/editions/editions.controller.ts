@@ -63,10 +63,33 @@ export class EditionsController {
     return this.editionsService.remove(id)
   }
 
+  /**
+   * Genera (o regenera) la clave del widget embebible. Regenerarla REVOCA los
+   * widgets ya publicados con la clave anterior.
+   */
+  @Post(':id/embed-key')
+  async generateEmbedKey(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Request() req: { user: { uid: string } },
+  ) {
+    await this.ownership.verifyEdition(req.user.uid, id)
+    return this.editionsService.generateEmbedKey(id)
+  }
+
+  /** Desactiva el widget: la clave deja de responder. */
+  @Delete(':id/embed-key')
+  async revokeEmbedKey(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Request() req: { user: { uid: string } },
+  ) {
+    await this.ownership.verifyEdition(req.user.uid, id)
+    return this.editionsService.revokeEmbedKey(id)
+  }
+
   @Post(':id/logo')
   @ApiConsumes('multipart/form-data')
   @ApiBody({ schema: { type: 'object', properties: { file: { type: 'string', format: 'binary' } } } })
-  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } }))
+  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } }))
   async uploadLogo(@Param('id', ParseUUIDPipe) id: string, @UploadedFile() file: Express.Multer.File, @Request() req: { user: { uid: string } }) {
     await this.ownership.verifyEdition(req.user.uid, id)
     return this.editionsService.uploadLogo(id, file)
@@ -75,7 +98,7 @@ export class EditionsController {
   @Post(':id/banner')
   @ApiConsumes('multipart/form-data')
   @ApiBody({ schema: { type: 'object', properties: { file: { type: 'string', format: 'binary' } } } })
-  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } }))
+  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } }))
   async uploadBanner(@Param('id', ParseUUIDPipe) id: string, @UploadedFile() file: Express.Multer.File, @Request() req: { user: { uid: string } }) {
     await this.ownership.verifyEdition(req.user.uid, id)
     return this.editionsService.uploadBanner(id, file)

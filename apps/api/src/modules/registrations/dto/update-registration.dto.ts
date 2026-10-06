@@ -1,4 +1,4 @@
-import { IsEnum, IsInt, IsISO8601, IsOptional, IsUUID, Min, ValidateIf } from 'class-validator'
+import { IsBoolean, IsEnum, IsInt, IsISO8601, IsOptional, IsUUID, Min, ValidateIf } from 'class-validator'
 import { ApiProperty } from '@nestjs/swagger'
 
 export type RegistrationStatus = 'pending' | 'approved' | 'rejected' | 'withdrawn'
@@ -21,6 +21,18 @@ export class UpdateRegistrationDto {
   @IsInt()
   @Min(1)
   seedRank?: number
+
+  @ApiProperty({
+    required: false,
+    nullable: true,
+    description:
+      'Candado de nomina de este equipo: null hereda el cierre general, ' +
+      'true lo cierra siempre, false lo abre aunque el general este cerrado',
+  })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsBoolean()
+  rosterLocked?: boolean | null
 
   @ApiProperty({ required: false, nullable: true, description: 'Marcar pago (null para limpiar)' })
   @IsOptional()

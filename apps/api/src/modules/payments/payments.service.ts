@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common'
-import { and, desc, eq, sql } from 'drizzle-orm'
+import { and, desc, eq, notInArray, sql } from 'drizzle-orm'
 import { DatabaseService } from '../../db/database.service'
 import { editions, fines, payments, registrations, teams } from '../../db/schema'
 import { CreatePaymentDto } from './dto/create-payment.dto'
@@ -118,14 +118,16 @@ export class PaymentsService {
     const [edition] = await this.db.select().from(editions).where(eq(editions.id, editionId))
     if (!edition) throw new NotFoundException(`Edición ${editionId} no encontrada`)
 
-    const approvedRegs = await this.db
+    // Equipos participantes = inscripciones no rechazadas/retiradas (misma regla que
+    // tabla y grupos). El cobro de inscripción aplica a todos los participantes.
+    const participatingRegs = await this.db
       .select({ id: registrations.id, teamId: registrations.teamId })
       .from(registrations)
       .where(and(
         eq(registrations.editionId, editionId),
-        eq(registrations.status, 'approved'),
+        notInArray(registrations.status, ['rejected', 'withdrawn']),
       ))
-    const teamsApproved = approvedRegs.length
+    const teamsApproved = participatingRegs.length
 
     // Verified registration payments per team
     const verifiedRegPayments = await this.db
@@ -146,7 +148,7 @@ export class PaymentsService {
 
     let regsPaidSum = 0
     let teamsPaid = 0
-    for (const reg of approvedRegs) {
+    for (const reg of participatingRegs) {
       const paid = paidByTeam.get(reg.teamId) ?? 0
       regsPaidSum += paid
       if (paid >= edition.registrationFee) teamsPaid++

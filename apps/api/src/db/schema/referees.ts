@@ -11,6 +11,10 @@ export const referees = pgTable('referees', {
   phone: varchar('phone', { length: 20 }),
   photoUrl: text('photo_url'),
   licenseNumber: varchar('license_number', { length: 40 }),
+  /** Correo con el que se vincula su cuenta de la app (para poder dirigir). */
+  email: varchar('email', { length: 160 }),
+  /** referee | delegate | both — para qué se puede asignar a esta persona. */
+  role: varchar('role', { length: 16 }).notNull().default('referee'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 })

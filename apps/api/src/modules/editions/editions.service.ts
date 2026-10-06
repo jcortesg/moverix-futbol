@@ -1,3 +1,4 @@
+import { randomBytes } from 'crypto'
 import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common'
 import { and, eq } from 'drizzle-orm'
 import { randomUUID } from 'crypto'
@@ -6,7 +7,8 @@ import { StorageService } from '../../common/services/storage.service'
 import { editions } from '../../db/schema'
 import { CreateEditionDto } from './dto/create-edition.dto'
 import { UpdateEditionDto } from './dto/update-edition.dto'
-import { validateCups, type CupDistribution } from '../../common/utils/cup-logic'
+import { validateCups, type CupDistribution, type CupConfig } from '../../common/utils/cup-logic'
+import { normalizeFormatConfig } from '../../common/utils/format-config'
 
 @Injectable()
 export class EditionsService {
@@ -45,6 +47,9 @@ export class EditionsService {
           formatConfig: dto.formatConfig,
           tiebreakerRules: dto.tiebreakerRules,
           maxTeams: dto.maxTeams,
+          minPlayersPerTeam: dto.minPlayersPerTeam,
+          maxPlayersPerTeam: dto.maxPlayersPerTeam,
+          requiredPlayerFields: dto.requiredPlayerFields ?? [],
           registrationFee: dto.registrationFee,
           prizePool: dto.prizePool,
           currency: dto.currency,
@@ -111,52 +116,60 @@ export class EditionsService {
 
   private validateFormatConfig(formatConfig: Record<string, unknown> | undefined) {
     if (!formatConfig) return
-    const phase1 = formatConfig.phase1 as Record<string, unknown> | undefined
-    const phase2 = formatConfig.phase2 as Record<string, unknown> | undefined
-    if (!phase2) return
+    const cfg = normalizeFormatConfig(formatConfig)
 
-    // Multi-cup requires groups as phase1
-    if (phase2.kind === 'multi_cup' && (!phase1 || phase1.kind !== 'groups')) {
-      throw new BadRequestException('Multi-Copa requiere fase de grupos como fase 1')
-    }
+    for (let idx = 0; idx < cfg.phases.length; idx++) {
+      const phase = cfg.phases[idx]
 
-    if (phase2.kind !== 'multi_cup' || !Array.isArray(phase2.cups)) return
-    if (!phase1) return
+      if (phase.kind === 'multi_cup') {
+        // Multi-cup requires a preceding groups phase
+        let groupsPhase: typeof cfg.phases[number] | undefined
+        for (let j = idx - 1; j >= 0; j--) {
+          if (cfg.phases[j].kind === 'groups') { groupsPhase = cfg.phases[j]; break }
+        }
+        if (!groupsPhase) {
+          throw new BadRequestException('Multi-Copa requiere una fase de grupos precedente')
+        }
 
-    const groupCount = (phase1.groupCount as number) || 0
-    const teamsPerGroup = (phase1.teamsPerGroup as number) || 0
-    const distribution = (phase2.distribution as CupDistribution) || 'reclassification'
+        const cups = phase.cups as unknown as CupConfig[] | undefined
+        if (!Array.isArray(cups)) continue
 
-    if (groupCount <= 0 || teamsPerGroup <= 0) return
+        const groupCount = (groupsPhase.groupCount as number) || 0
+        const teamsPerGroup = (groupsPhase.teamsPerGroup as number) || 0
+        const distribution = (phase.distribution as CupDistribution) || 'reclassification'
 
-    const result = validateCups(phase2.cups, distribution, groupCount, teamsPerGroup)
-    if (!result.allValid) {
-      const errors: string[] = []
-      if (result.hasOverlap) errors.push('Hay posiciones superpuestas entre copas')
-      if (result.hasGaps) errors.push('Hay huecos entre las posiciones de las copas')
-      if (result.totalAssigned !== result.totalExpected) {
-        errors.push(`Equipos asignados (${result.totalAssigned}) no coincide con total (${result.totalExpected})`)
-      }
-      result.cupErrors.forEach((e, i) => {
-        if (e) errors.push(`Copa ${i + 1}: ${e}`)
-      })
-      if (errors.length > 0) {
-        throw new BadRequestException(`Configuración de copas inválida: ${errors.join('. ')}`)
-      }
-    }
+        if (groupCount <= 0 || teamsPerGroup <= 0) continue
 
-    // Validate cup sub-format configs
-    for (let i = 0; i < phase2.cups.length; i++) {
-      const cup = phase2.cups[i] as Record<string, unknown>
-      if (cup.format === 'groups_knockout' && cup.groups) {
-        const g = cup.groups as Record<string, unknown>
-        const gc = (g.groupCount as number) || 0
-        const tpg = (g.teamsPerGroup as number) || 0
-        const qpg = (g.qualifiersPerGroup as number) || 0
-        if (gc < 2) throw new BadRequestException(`Copa ${i + 1}: mínimo 2 grupos internos`)
-        if (tpg < 2) throw new BadRequestException(`Copa ${i + 1}: mínimo 2 equipos por grupo interno`)
-        if (qpg < 1) throw new BadRequestException(`Copa ${i + 1}: mínimo 1 clasificado por grupo interno`)
-        if (qpg > tpg) throw new BadRequestException(`Copa ${i + 1}: clasificados por grupo (${qpg}) no puede exceder equipos por grupo (${tpg})`)
+        const result = validateCups(cups, distribution, groupCount, teamsPerGroup)
+        if (!result.allValid) {
+          const errors: string[] = []
+          if (result.hasOverlap) errors.push('Hay posiciones superpuestas entre copas')
+          if (result.hasGaps) errors.push('Hay huecos entre las posiciones de las copas')
+          if (result.totalAssigned !== result.totalExpected) {
+            errors.push(`Equipos asignados (${result.totalAssigned}) no coincide con total (${result.totalExpected})`)
+          }
+          result.cupErrors.forEach((e, i) => {
+            if (e) errors.push(`Copa ${i + 1}: ${e}`)
+          })
+          if (errors.length > 0) {
+            throw new BadRequestException(`Configuración de copas inválida: ${errors.join('. ')}`)
+          }
+        }
+
+        // Validate cup sub-format configs
+        for (let i = 0; i < cups.length; i++) {
+          const cup = cups[i] as Record<string, unknown>
+          if (cup.format === 'groups_knockout' && cup.groups) {
+            const g = cup.groups as Record<string, unknown>
+            const gc = (g.groupCount as number) || 0
+            const tpg = (g.teamsPerGroup as number) || 0
+            const qpg = (g.qualifiersPerGroup as number) || 0
+            if (gc < 2) throw new BadRequestException(`Copa ${i + 1}: mínimo 2 grupos internos`)
+            if (tpg < 2) throw new BadRequestException(`Copa ${i + 1}: mínimo 2 equipos por grupo interno`)
+            if (qpg < 1) throw new BadRequestException(`Copa ${i + 1}: mínimo 1 clasificado por grupo interno`)
+            if (qpg > tpg) throw new BadRequestException(`Copa ${i + 1}: clasificados por grupo (${qpg}) no puede exceder equipos por grupo (${tpg})`)
+          }
+        }
       }
     }
   }
@@ -169,6 +182,30 @@ export class EditionsService {
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-|-$/g, '')
       .slice(0, 60)
+  }
+
+  /**
+   * Clave del widget: 24 chars hex sin guiones. Se regenera bajo demanda, lo
+   * que invalida los widgets publicados con la clave vieja.
+   */
+  async generateEmbedKey(id: string) {
+    await this.findOne(id)
+    const key = randomBytes(12).toString('hex')
+    const [updated] = await this.db
+      .update(editions)
+      .set({ embedKey: key, updatedAt: new Date() })
+      .where(eq(editions.id, id))
+      .returning()
+    return { embedKey: updated.embedKey }
+  }
+
+  async revokeEmbedKey(id: string) {
+    await this.findOne(id)
+    await this.db
+      .update(editions)
+      .set({ embedKey: null, updatedAt: new Date() })
+      .where(eq(editions.id, id))
+    return { embedKey: null }
   }
 
   async remove(id: string) {

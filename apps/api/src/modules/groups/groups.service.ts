@@ -5,9 +5,7 @@ import { editions, groups, registrations } from '../../db/schema'
 import { CreateGroupDto } from './dto/create-group.dto'
 import { UpdateGroupDto } from './dto/update-group.dto'
 
-type FormatConfigShape = {
-  phase1?: { kind?: string; groupCount?: number; teamsPerGroup?: number }
-}
+import { normalizeFormatConfig, findPhase } from '../../common/utils/format-config'
 
 @Injectable()
 export class GroupsService {
@@ -56,9 +54,9 @@ export class GroupsService {
     const [edition] = await this.db.select().from(editions).where(eq(editions.id, editionId))
     if (!edition) throw new NotFoundException(`Edición ${editionId} no encontrada`)
 
-    const cfg = (edition.formatConfig ?? {}) as FormatConfigShape
-    const phase1 = cfg.phase1
-    if (!phase1 || phase1.kind !== 'groups' || !phase1.groupCount) {
+    const cfg = normalizeFormatConfig(edition.formatConfig as Record<string, unknown>)
+    const groupsPhase = findPhase(cfg.phases, 'groups')
+    if (!groupsPhase || !groupsPhase.groupCount) {
       throw new BadRequestException(
         'La edición no está configurada con fase de grupos. Ajusta el formato primero.',
       )
@@ -71,8 +69,8 @@ export class GroupsService {
       )
     }
 
-    const count = Math.min(Math.max(phase1.groupCount, 1), 26)
-    const teamsPerGroup = phase1.teamsPerGroup ?? null
+    const count = Math.min(Math.max(groupsPhase.groupCount as number, 1), 26)
+    const teamsPerGroup = (groupsPhase.teamsPerGroup as number) ?? null
 
     const rows = Array.from({ length: count }, (_, i) => {
       const code = String.fromCharCode(65 + i) // A..Z

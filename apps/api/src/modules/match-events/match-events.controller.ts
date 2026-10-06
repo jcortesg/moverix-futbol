@@ -34,14 +34,14 @@ export class MatchEventsController {
 
   @Post()
   async create(@Body() dto: CreateMatchEventDto, @Request() req: { user: { uid: string } }) {
-    await this.ownership.verifyMatch(req.user.uid, dto.matchId)
+    await this.ownership.verifyMatchWriteAccess(req.user.uid, dto.matchId)
     return this.service.create(dto)
   }
 
   @Get()
   @ApiQuery({ name: 'matchId', required: true })
   async findAll(@Query('matchId', ParseUUIDPipe) matchId: string, @Request() req: { user: { uid: string } }) {
-    await this.ownership.verifyMatch(req.user.uid, matchId)
+    await this.ownership.verifyMatchWriteAccess(req.user.uid, matchId)
     return this.service.findByMatch(matchId)
   }
 
@@ -53,27 +53,27 @@ export class MatchEventsController {
 
   @Patch(':id')
   async update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateMatchEventDto, @Request() req: { user: { uid: string } }) {
-    await this.ownership.verifyMatchEvent(req.user.uid, id)
+    await this.ownership.verifyMatchEventWriteAccess(req.user.uid, id)
     return this.service.update(id, dto)
   }
 
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
   async remove(@Param('id', ParseUUIDPipe) id: string, @Request() req: { user: { uid: string } }) {
-    await this.ownership.verifyMatchEvent(req.user.uid, id)
+    await this.ownership.verifyMatchEventWriteAccess(req.user.uid, id)
     return this.service.remove(id)
   }
 
   @Post('mvp')
   async setMvp(@Body() dto: SetMvpDto, @Request() req: { user: { uid: string } }) {
-    await this.ownership.verifyMatch(req.user.uid, dto.matchId)
+    await this.ownership.verifyMatchWriteAccess(req.user.uid, dto.matchId)
     return this.service.setMvp(dto.matchId, dto.teamId, dto.playerUid, dto.playerName)
   }
 
   @Delete('mvp/:matchId')
   @HttpCode(HttpStatus.NO_CONTENT)
   async clearMvp(@Param('matchId', ParseUUIDPipe) matchId: string, @Request() req: { user: { uid: string } }) {
-    await this.ownership.verifyMatch(req.user.uid, matchId)
+    await this.ownership.verifyMatchWriteAccess(req.user.uid, matchId)
     return this.service.clearMvp(matchId)
   }
 }

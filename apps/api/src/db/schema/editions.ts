@@ -22,6 +22,11 @@ export const editions = pgTable(
     bracketState: jsonb('bracket_state'),
     tiebreakerRules: jsonb('tiebreaker_rules'),
     maxTeams: integer('max_teams').notNull().default(16),
+    // Config de inscripción de jugadores (la define el organizador por edición).
+    minPlayersPerTeam: integer('min_players_per_team'),
+    maxPlayersPerTeam: integer('max_players_per_team'),
+    // Lista de campos obligatorios del jugador. Vacío => defaults en el backend.
+    requiredPlayerFields: jsonb('required_player_fields').notNull().default([]),
     registrationFee: integer('registration_fee').notNull().default(0),
     prizePool: integer('prize_pool').notNull().default(0),
     currency: varchar('currency', { length: 3 }).notNull().default('COP'),
@@ -29,6 +34,18 @@ export const editions = pgTable(
     bannerUrl: text('banner_url'),
     slug: varchar('slug', { length: 100 }).notNull().unique(),
     isPublished: boolean('is_published').notNull().default(false),
+    hiddenOnIos: boolean('hidden_on_ios').notNull().default(false),
+    // Inscripciones abiertas/cerradas, independiente de status (deportivo).
+    registrationsOpen: boolean('registrations_open').notNull().default(true),
+    /**
+     * Valores de multas de esta edición. Claves opcionales; lo que falte cae en
+     * los valores por defecto del servicio. Ver 0031_edition_fine_defaults.sql
+     */
+    fineDefaults: jsonb('fine_defaults'),
+    /** Cierre GENERAL de nóminas: bloquea la edición de todas las plantillas. */
+    rostersLocked: boolean('rosters_locked').notNull().default(false),
+    /** Clave pública y revocable para el widget embebible de estadísticas. */
+    embedKey: varchar('embed_key', { length: 32 }),
     publicDescription: text('public_description'),
     rulesUrl: text('rules_url'),
     startDate: timestamp('start_date', { withTimezone: true }),

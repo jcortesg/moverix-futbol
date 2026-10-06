@@ -32,6 +32,8 @@ async function bootstrap() {
     }),
   )
 
+  // CORS normal de la app. El widget embebible abre CORS por su cuenta con
+  // cabeceras propias en su controlador (public/embed), para no relajar esto.
   app.enableCors({
     origin: process.env.CORS_ORIGINS?.split(',') ?? ['http://localhost:3000'],
     credentials: true,

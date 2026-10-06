@@ -1,7 +1,8 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common'
-import { eq } from 'drizzle-orm'
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common'
+import { and, eq, inArray, isNull } from 'drizzle-orm'
 import { DatabaseService } from '../../db/database.service'
-import { editions, registrations, teams } from '../../db/schema'
+import { editions, registrationPlayers, registrations, teams } from '../../db/schema'
+import { isFieldFilled, resolveRequiredFields } from '../mobile/roster-fields'
 import { CreateRegistrationDto } from './dto/create-registration.dto'
 import { UpdateRegistrationDto } from './dto/update-registration.dto'
 
@@ -41,7 +42,7 @@ export class RegistrationsService {
   }
 
   async findByEdition(editionId: string) {
-    return this.db
+    const rows = await this.db
       .select({
         id: registrations.id,
         editionId: registrations.editionId,
@@ -51,6 +52,7 @@ export class RegistrationsService {
         seedRank: registrations.seedRank,
         registeredByUid: registrations.registeredByUid,
         paidAt: registrations.paidAt,
+        rosterLocked: registrations.rosterLocked,
         approvedAt: registrations.approvedAt,
         createdAt: registrations.createdAt,
         updatedAt: registrations.updatedAt,
@@ -63,11 +65,61 @@ export class RegistrationsService {
           secondaryColor: teams.secondaryColor,
           city: teams.city,
           directorUid: teams.directorUid,
+          pendingDelegateEmail: teams.pendingDelegateEmail,
         },
       })
       .from(registrations)
       .innerJoin(teams, eq(teams.id, registrations.teamId))
       .where(eq(registrations.editionId, editionId))
+
+    return this.withRosterSummary(editionId, rows)
+  }
+
+  /**
+   * Agrega a cada inscripción cuántos jugadores tiene y cuántos cumplen TODOS
+   * los campos que exige la edición. Se resuelve con UNA sola consulta para
+   * toda la edición (no una por equipo), y con el mismo criterio de
+   * `isFieldFilled` que usa la validación del envío de inscripción.
+   */
+  private async withRosterSummary<T extends { id: string }>(
+    editionId: string,
+    rows: T[],
+  ): Promise<(T & { playersCount: number; playersComplete: number; playersIncomplete: number })[]> {
+    if (rows.length === 0) return []
+
+    const [edition] = await this.db
+      .select({ requiredPlayerFields: editions.requiredPlayerFields })
+      .from(editions)
+      .where(eq(editions.id, editionId))
+    const required = resolveRequiredFields(edition?.requiredPlayerFields)
+
+    const players = await this.db
+      .select()
+      .from(registrationPlayers)
+      .where(
+        and(
+          inArray(
+            registrationPlayers.registrationId,
+            rows.map((r) => r.id),
+          ),
+          isNull(registrationPlayers.removedAt),
+        ),
+      )
+
+    const total = new Map<string, number>()
+    const complete = new Map<string, number>()
+    for (const p of players) {
+      const id = p.registrationId
+      total.set(id, (total.get(id) ?? 0) + 1)
+      const ok = required.every((f) => isFieldFilled(p as Record<string, unknown>, f))
+      if (ok) complete.set(id, (complete.get(id) ?? 0) + 1)
+    }
+
+    return rows.map((r) => {
+      const count = total.get(r.id) ?? 0
+      const ok = complete.get(r.id) ?? 0
+      return { ...r, playersCount: count, playersComplete: ok, playersIncomplete: count - ok }
+    })
   }
 
   async findMine(teamDirectorUid: string) {
@@ -101,6 +153,7 @@ export class RegistrationsService {
         seedRank: registrations.seedRank,
         registeredByUid: registrations.registeredByUid,
         paidAt: registrations.paidAt,
+        rosterLocked: registrations.rosterLocked,
         approvedAt: registrations.approvedAt,
         createdAt: registrations.createdAt,
         updatedAt: registrations.updatedAt,
@@ -113,6 +166,7 @@ export class RegistrationsService {
           secondaryColor: teams.secondaryColor,
           city: teams.city,
           directorUid: teams.directorUid,
+          pendingDelegateEmail: teams.pendingDelegateEmail,
         },
       })
       .from(registrations)
@@ -127,12 +181,18 @@ export class RegistrationsService {
     const patch: Record<string, unknown> = { updatedAt: new Date() }
 
     if (dto.status !== undefined) {
+      // Una inscripción en 'draft' aún no fue enviada por el equipo: el
+      // organizador puede verla pero no aprobarla hasta que esté en 'pending'.
+      if (current.status === 'draft' && dto.status === 'approved') {
+        throw new BadRequestException('El equipo aún no ha enviado su inscripción (plantilla incompleta)')
+      }
       patch.status = dto.status
       if (dto.status === 'approved' && !current.approvedAt) {
         patch.approvedAt = new Date()
       }
     }
     if (dto.groupId !== undefined) patch.groupId = dto.groupId
+    if (dto.rosterLocked !== undefined) patch.rosterLocked = dto.rosterLocked
     if (dto.seedRank !== undefined) patch.seedRank = dto.seedRank
     if (dto.paidAt !== undefined) patch.paidAt = dto.paidAt ? new Date(dto.paidAt) : null
 

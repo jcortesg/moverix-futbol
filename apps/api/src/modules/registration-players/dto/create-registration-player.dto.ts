@@ -98,4 +98,16 @@ export class CreateRegistrationPlayerDto {
   @IsOptional()
   @IsBoolean()
   isCaptain?: boolean
+
+  @ApiProperty({ required: false, example: 'María Pérez', description: 'Nombre del contacto de emergencia' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  emergencyContactName?: string
+
+  @ApiProperty({ required: false, example: '3124035940', description: 'Teléfono del contacto de emergencia' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  emergencyContactPhone?: string
 }

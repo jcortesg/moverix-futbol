@@ -14,6 +14,7 @@ import { GroupsModule } from './modules/groups/groups.module'
 import { MatchdaysModule } from './modules/matchdays/matchdays.module'
 import { MatchesModule } from './modules/matches/matches.module'
 import { MatchEventsModule } from './modules/match-events/match-events.module'
+import { MatchDelegatesModule } from './modules/match-delegates/match-delegates.module'
 import { BracketsModule } from './modules/brackets/brackets.module'
 import { StandingsModule } from './modules/standings/standings.module'
 import { PaymentsModule } from './modules/payments/payments.module'
@@ -23,6 +24,7 @@ import { PlayerStatsModule } from './modules/player-stats/player-stats.module'
 import { OrganizationsModule } from './modules/organizations/organizations.module'
 import { VenuesModule } from './modules/venues/venues.module'
 import { RefereesModule } from './modules/referees/referees.module'
+import { PlayersAdminModule } from './modules/players-admin/players-admin.module'
 import { MobileModule } from './modules/mobile/mobile.module'
 import { PublicModule } from './modules/public/public.module'
 import { SocialModule } from './modules/social/social.module'
@@ -44,6 +46,7 @@ import { UserAuthMiddleware } from './common/middleware/user-auth.middleware'
     OrganizationsModule,
     VenuesModule,
     RefereesModule,
+    PlayersAdminModule,
     LeaguesModule,
     EditionsModule,
     TeamsModule,
@@ -53,6 +56,7 @@ import { UserAuthMiddleware } from './common/middleware/user-auth.middleware'
     MatchdaysModule,
     MatchesModule,
     MatchEventsModule,
+    MatchDelegatesModule,
     BracketsModule,
     StandingsModule,
     PaymentsModule,

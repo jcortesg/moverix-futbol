@@ -1,4 +1,4 @@
-import { IsEnum, IsInt, IsOptional, Min } from 'class-validator'
+import { IsEnum, IsInt, IsOptional, IsUUID, Min } from 'class-validator'
 import { ApiProperty } from '@nestjs/swagger'
 import { PartialType, OmitType } from '@nestjs/mapped-types'
 import { CreateMatchDto } from './create-match.dto'
@@ -7,6 +7,17 @@ export type MatchStatus = 'scheduled' | 'live' | 'finished' | 'postponed' | 'can
 const MATCH_STATUSES: MatchStatus[] = ['scheduled', 'live', 'finished', 'postponed', 'cancelled', 'walkover']
 
 export class UpdateMatchDto extends PartialType(OmitType(CreateMatchDto, ['matchdayId'] as const)) {
+  /**
+   * Mover el partido a otra jornada. Los goles y tarjetas cuelgan del partido,
+   * no de la jornada, así que reasignar no toca ningún evento. El service valida
+   * que la jornada destino sea de la misma edición y que ningún equipo quede con
+   * dos partidos en ella.
+   */
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsUUID()
+  matchdayId?: string
+
   @ApiProperty({ enum: MATCH_STATUSES, required: false })
   @IsOptional()
   @IsEnum(MATCH_STATUSES)

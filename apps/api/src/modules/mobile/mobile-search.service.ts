@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common'
-import { ilike, or, sql } from 'drizzle-orm'
+import { and, eq, ne, ilike, or, sql } from 'drizzle-orm'
 import { DatabaseService } from '../../db/database.service'
 import { playerProfiles, teams, editions, leagues } from '../../db/schema'
 
@@ -11,7 +11,7 @@ export class MobileSearchService {
     return this.database.db
   }
 
-  async search(query: string) {
+  async search(query: string, isIos = false) {
     const q = query.trim()
     if (q.length < 2) return { players: [], teams: [], editions: [] }
 
@@ -67,9 +67,12 @@ export class MobileSearchService {
         .from(editions)
         .innerJoin(leagues, sql`${leagues.id} = ${editions.leagueId}`)
         .where(
-          or(
-            ilike(editions.name, pattern),
-            ilike(leagues.name, pattern),
+          and(
+            or(ilike(editions.name, pattern), ilike(leagues.name, pattern)),
+            // Nunca mostrar torneos en borrador en la búsqueda.
+            ne(editions.status, 'draft'),
+            // Restricción de plataforma: ocultar torneos marcados en iOS.
+            isIos ? eq(editions.hiddenOnIos, false) : undefined,
           ),
         )
         .limit(15),

@@ -52,13 +52,13 @@ export class MatchesController {
 
   @Patch(':id')
   async update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateMatchDto, @Request() req: { user: { uid: string } }) {
-    await this.ownership.verifyMatch(req.user.uid, id)
+    await this.ownership.verifyMatchWriteAccess(req.user.uid, id)
     return this.service.update(id, dto)
   }
 
   @Patch(':id/finalize')
   async finalize(@Param('id', ParseUUIDPipe) id: string, @Body() dto: FinalizeMatchDto, @Request() req: { user: { uid: string } }) {
-    await this.ownership.verifyMatch(req.user.uid, id)
+    await this.ownership.verifyMatchWriteAccess(req.user.uid, id)
     return this.service.finalize(id, dto)
   }
 

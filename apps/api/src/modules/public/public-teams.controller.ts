@@ -1,4 +1,10 @@
-import { Body, Controller, Get, Param, Post, Query, Req, UnauthorizedException } from '@nestjs/common'
+import {
+  Body, Controller, Get, Param, Post, Query, Req, Res,
+  UnauthorizedException, UploadedFile, UseInterceptors,
+} from '@nestjs/common'
+import { FileInterceptor } from '@nestjs/platform-express'
+import { memoryStorage } from 'multer'
+import type { Response } from 'express'
 import { ApiTags } from '@nestjs/swagger'
 import { Public } from '../../common/decorators/public.decorator'
 import { PublicTeamsService } from './public-teams.service'
@@ -44,6 +50,38 @@ export class PublicTeamsController {
   async addPlayer(@Req() req: any, @Body() dto: any) {
     const uid = await extractUid(req)
     return this.service.addPlayerForDirector(uid, dto)
+  }
+
+  /** Upload a player's ID document / cédula (team director only) */
+  @Post('roster/:playerId/document')
+  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } }))
+  async uploadPlayerDocument(
+    @Param('playerId') playerId: string,
+    @UploadedFile() file: Express.Multer.File,
+    @Req() req: any,
+  ) {
+    const uid = await extractUid(req)
+    return this.service.uploadPlayerDocumentForDirector(uid, playerId, file)
+  }
+
+  /** View a player's ID document (team director only) */
+  @Get('roster/:playerId/document')
+  async getPlayerDocument(
+    @Param('playerId') playerId: string,
+    @Req() req: any,
+    @Res() res: Response,
+  ) {
+    const uid = await extractUid(req)
+    const { buffer, contentType } = await this.service.getPlayerDocumentForDirector(uid, playerId)
+    res.setHeader('Content-Type', contentType)
+    res.setHeader('Cache-Control', 'private, no-store')
+    res.send(buffer)
+  }
+
+  /** Datos del equipo por código de invitación (landing pública /i/[code]) */
+  @Get('invite/:code')
+  getByCode(@Param('code') code: string) {
+    return this.service.getTeamByCode(code)
   }
 
   /** Get team info by slug (public, no auth required) — MUST be last (wildcard :slug) */

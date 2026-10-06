@@ -1,8 +1,10 @@
 import { Injectable, ConflictException } from '@nestjs/common'
-import { eq, sql, and, or, desc, ne, like, ilike } from 'drizzle-orm'
+import { eq, sql, and, or, desc, asc, ne, like, ilike, inArray, isNull } from 'drizzle-orm'
 import * as admin from 'firebase-admin'
 import { DatabaseService } from '../../db/database.service'
 import { StorageService } from '../../common/services/storage.service'
+import { resolveRequiredFields, isFieldFilled, fieldLabel } from './roster-fields'
+import { MobileNotificationsService } from './mobile-notifications.service'
 import {
   playerProfiles,
   playerStats,
@@ -12,10 +14,14 @@ import {
   editions,
   leagues,
   matches,
+  matchdays,
   matchEvents,
+  venues,
+  groups,
   follows,
   fines,
   teamMembers,
+  matchDelegates,
 } from '../../db/schema'
 
 @Injectable()
@@ -23,6 +29,7 @@ export class MobilePlayersService {
   constructor(
     private readonly database: DatabaseService,
     private readonly storage: StorageService,
+    private readonly notifications: MobileNotificationsService,
   ) {}
 
   private get db() {
@@ -257,6 +264,10 @@ export class MobilePlayersService {
             preferredFoot: profile.preferredFoot,
             birthYear: profile.birthYear,
             docNumber: profile.docNumber,
+            instagram: profile.instagram,
+            tiktok: profile.tiktok,
+            facebook: profile.facebook,
+            twitter: profile.twitter,
             followersCount: profile.followersCount,
             followingCount: profile.followingCount,
           }
@@ -280,26 +291,343 @@ export class MobilePlayersService {
       .from(playerProfiles)
       .where(eq(playerProfiles.uid, uid))
 
-    if (existing) return existing
+    let profile = existing
+    if (!profile) {
+      // Auto-create minimal profile. El token del primer acceso a veces no trae el
+      // displayName (la app lo setea con updateProfile justo tras el registro), así
+      // que se consulta a Firebase antes de caer en el prefijo del email.
+      const displayName = name ?? (await this.firebaseDisplayName(uid)) ?? email?.split('@')[0] ?? 'Jugador'
+      const username = `player_${uid.slice(0, 8).toLowerCase()}`
+      const [created] = await this.db
+        .insert(playerProfiles)
+        .values({ uid, username, fullName: displayName })
+        .returning()
+      profile = created
+    }
 
-    // Auto-create minimal profile
-    const displayName =
-      name ??
-      email?.split('@')[0] ??
-      'Jugador'
+    // Reclama equipos donde este email quedó como delegado pendiente. Idempotente
+    // y best-effort: se corre en cada acceso (cubre el caso de que el admin cargue
+    // el email después de que el usuario ya se registró).
+    if (email) {
+      await this.claimPendingDelegateTeams(uid, email, profile.fullName)
+      await this.claimPendingPlayerRows(uid, email, profile.fullName)
+      await this.claimPendingMatchDelegates(uid, email)
+    }
 
-    const username = `player_${uid.slice(0, 8).toLowerCase()}`
+    return profile
+  }
 
-    const [created] = await this.db
-      .insert(playerProfiles)
-      .values({
-        uid,
-        username,
-        fullName: displayName,
+  /**
+   * Vincula al usuario con los cupos de plantilla que el director cargó bajo un
+   * placeholder usando su email (registration_players.email). Re-apunta esas filas
+   * a su uid real y lo agrega a la nómina del equipo. Best-effort e idempotente.
+   */
+  /**
+   * Partidos donde al organizador lo invitó por CORREO antes de que tuviera
+   * cuenta: la fila queda con pending_email y aquí se le asigna su uid real.
+   * Best-effort e idempotente; corre en cada me/profile.
+   */
+  private async claimPendingMatchDelegates(uid: string, email: string) {
+    try {
+      const pending = await this.db
+        .select({ id: matchDelegates.id, matchId: matchDelegates.matchId })
+        .from(matchDelegates)
+        .where(
+          and(
+            sql`lower(${matchDelegates.pendingEmail}) = ${email.toLowerCase()}`,
+            isNull(matchDelegates.uid),
+          ),
+        )
+
+      for (const row of pending) {
+        try {
+          await this.db
+            .update(matchDelegates)
+            .set({ uid, pendingEmail: null })
+            .where(eq(matchDelegates.id, row.id))
+        } catch (err) {
+          // Si ya estaba asignado a este partido, el índice único lo rechaza:
+          // se descarta la invitación duplicada y se sigue.
+          console.error('[claimPendingMatchDelegates] (best-effort):', err)
+        }
+      }
+
+      if (pending.length) {
+        await this.notifications.createFor([uid], {
+          type: 'match',
+          title: 'Tienes partidos para dirigir',
+          body: `Te asignaron como delegado en ${pending.length} partido${pending.length === 1 ? '' : 's'}.`,
+          data: { kind: 'referee' },
+        })
+      }
+    } catch (err) {
+      console.error('[claimPendingMatchDelegates] error:', err)
+    }
+  }
+
+  private async claimPendingPlayerRows(uid: string, email: string, playerName: string) {
+    try {
+      const rows = await this.db
+        .select({ id: registrationPlayers.id, teamId: registrations.teamId })
+        .from(registrationPlayers)
+        .innerJoin(registrations, eq(registrations.id, registrationPlayers.registrationId))
+        .where(
+          and(
+            sql`lower(${registrationPlayers.email}) = lower(${email})`,
+            ne(registrationPlayers.playerUid, uid),
+          ),
+        )
+
+      for (const row of rows) {
+        // Re-apuntar la fila al uid real. Aislado: el índice único (registration_id,
+        // player_uid) puede chocar si el usuario ya está en esa inscripción; si falla,
+        // se omite esa fila sin afectar las demás.
+        try {
+          await this.db
+            .update(registrationPlayers)
+            .set({ playerUid: uid })
+            .where(eq(registrationPlayers.id, row.id))
+        } catch (err) {
+          console.error('[claimPendingPlayerRows] re-point row (best-effort):', err)
+          continue
+        }
+
+        // Asegurar que figure en la nómina del equipo.
+        try {
+          await this.db
+            .insert(teamMembers)
+            .values({ teamId: row.teamId, playerUid: uid, playerName, role: 'player', isPlayer: true })
+            .onConflictDoNothing({ target: [teamMembers.teamId, teamMembers.playerUid] })
+        } catch (err) {
+          console.error('[claimPendingPlayerRows] add member (best-effort):', err)
+        }
+      }
+    } catch (err) {
+      console.error('[claimPendingPlayerRows] error (best-effort):', err)
+    }
+  }
+
+  /** displayName real del usuario en Firebase Auth (best-effort, null si falla). */
+  private async firebaseDisplayName(uid: string): Promise<string | undefined> {
+    try {
+      const user = await admin.auth().getUser(uid)
+      const dn = user.displayName?.trim()
+      return dn || undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  /**
+   * Promueve al usuario a director de los equipos cuyo delegado quedó pendiente por
+   * email (teams.pending_delegate_email). Best-effort: cualquier fallo se traga para
+   * no romper el login/perfil.
+   */
+  private async claimPendingDelegateTeams(uid: string, email: string, playerName: string) {
+    try {
+      const pending = await this.db
+        .select({ id: teams.id, directorUid: teams.directorUid })
+        .from(teams)
+        .where(sql`lower(${teams.pendingDelegateEmail}) = lower(${email})`)
+
+      for (const team of pending) {
+        const oldDirectorUid = team.directorUid
+
+        // Asignación crítica en transacción: director + miembro director + limpieza placeholder.
+        await this.db.transaction(async (tx) => {
+          await tx
+            .update(teams)
+            .set({ directorUid: uid, pendingDelegateEmail: null, updatedAt: new Date() })
+            .where(eq(teams.id, team.id))
+
+          await tx
+            .insert(teamMembers)
+            .values({ teamId: team.id, playerUid: uid, playerName, role: 'director', isPlayer: false })
+            .onConflictDoUpdate({
+              target: [teamMembers.teamId, teamMembers.playerUid],
+              set: { role: 'director' },
+            })
+
+          if (oldDirectorUid && oldDirectorUid !== uid) {
+            await tx
+              .delete(teamMembers)
+              .where(and(eq(teamMembers.teamId, team.id), eq(teamMembers.playerUid, oldDirectorUid)))
+          }
+        })
+
+        // Best-effort (fuera de la tx crítica): re-apunta el cupo de contacto del roster
+        // al uid real. Aislado porque el índice único (registration_id, player_uid) podría
+        // chocar si el usuario ya figura como jugador; si falla no revierte la asignación.
+        if (oldDirectorUid && oldDirectorUid !== uid) {
+          try {
+            const regs = await this.db
+              .select({ id: registrations.id })
+              .from(registrations)
+              .where(eq(registrations.teamId, team.id))
+            const regIds = regs.map((r) => r.id)
+            if (regIds.length > 0) {
+              await this.db
+                .update(registrationPlayers)
+                .set({ playerUid: uid })
+                .where(
+                  and(
+                    inArray(registrationPlayers.registrationId, regIds),
+                    eq(registrationPlayers.playerUid, oldDirectorUid),
+                    sql`lower(${registrationPlayers.email}) = lower(${email})`,
+                  ),
+                )
+            }
+          } catch (err) {
+            console.error('[claimPendingDelegateTeams] re-point roster (best-effort):', err)
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[claimPendingDelegateTeams] error (best-effort):', err)
+    }
+  }
+
+  /**
+   * Pendientes en inscripciones en BORRADOR para la alerta del inicio:
+   *  - kind 'director': eres DT de un equipo con inscripción en borrador → completar/enviar.
+   *  - kind 'player': eres jugador y te faltan campos requeridos → completar tus datos.
+   * Si eres DT del equipo, prima el caso 'director' para esa inscripción.
+   */
+  async myPendingData(uid: string) {
+    type Pending = {
+      kind: 'director' | 'player'
+      registrationId: string
+      edition: { id: string; name: string; logoUrl: string | null; bannerUrl: string | null }
+      team: { id: string; name: string; logoUrl: string | null }
+      missingFields: { key: string; label: string }[]
+    }
+
+    // 1) Inscripciones en borrador de equipos que dirijo
+    const directorRows = await this.db
+      .select({
+        registrationId: registrations.id,
+        edition: { id: editions.id, name: editions.name, logoUrl: editions.logoUrl, bannerUrl: editions.bannerUrl },
+        team: { id: teams.id, name: teams.name, logoUrl: teams.logoUrl },
       })
-      .returning()
+      .from(registrations)
+      .innerJoin(editions, eq(editions.id, registrations.editionId))
+      .innerJoin(teams, eq(teams.id, registrations.teamId))
+      .where(and(eq(teams.directorUid, uid), eq(registrations.status, 'draft')))
 
-    return created
+    const result: Pending[] = directorRows.map((r) => ({
+      kind: 'director',
+      registrationId: r.registrationId,
+      edition: r.edition,
+      team: r.team,
+      missingFields: [],
+    }))
+
+    // 2) Inscripciones en borrador donde soy jugador con campos faltantes.
+    //    Se incluye AUNQUE sea DT de esa inscripción: completar mis datos como
+    //    jugador es una acción distinta a completar/enviar la inscripción.
+    const playerRows = await this.db
+      .select({
+        registrationId: registrations.id,
+        player: registrationPlayers,
+        edition: {
+          id: editions.id,
+          name: editions.name,
+          logoUrl: editions.logoUrl,
+          bannerUrl: editions.bannerUrl,
+          requiredPlayerFields: editions.requiredPlayerFields,
+        },
+        team: { id: teams.id, name: teams.name, logoUrl: teams.logoUrl },
+      })
+      .from(registrationPlayers)
+      .innerJoin(registrations, eq(registrations.id, registrationPlayers.registrationId))
+      .innerJoin(editions, eq(editions.id, registrations.editionId))
+      .innerJoin(teams, eq(teams.id, registrations.teamId))
+      .where(and(eq(registrationPlayers.playerUid, uid), eq(registrations.status, 'draft')))
+
+    for (const r of playerRows) {
+      const required = resolveRequiredFields(r.edition.requiredPlayerFields)
+      const missing = required.filter((key) => !isFieldFilled(r.player as Record<string, unknown>, key))
+      if (!missing.length) continue
+      result.push({
+        kind: 'player',
+        registrationId: r.registrationId,
+        edition: { id: r.edition.id, name: r.edition.name, logoUrl: r.edition.logoUrl, bannerUrl: r.edition.bannerUrl },
+        team: { id: r.team.id, name: r.team.name, logoUrl: r.team.logoUrl },
+        missingFields: missing.map((key) => ({ key, label: fieldLabel(key) })),
+      })
+    }
+
+    return result
+  }
+
+  /**
+   * Partido relevante (en vivo o próximo) por cada equipo del usuario, para la
+   * tarjeta del inicio. Prioriza 'live'; si no hay, el próximo 'scheduled' futuro.
+   * Un partido por equipo.
+   */
+  async myUpcomingMatches(uid: string) {
+    const teamRows = await this.db
+      .select({ teamId: teamMembers.teamId })
+      .from(teamMembers)
+      .where(eq(teamMembers.playerUid, uid))
+    const teamIds = [...new Set(teamRows.map((r) => r.teamId))]
+    if (teamIds.length === 0) return []
+
+    const rows = await this.db
+      .select({
+        matchId: matches.id,
+        status: matches.status,
+        homeScore: matches.homeScore,
+        awayScore: matches.awayScore,
+        scheduledAt: matches.scheduledAt,
+        homeTeamId: matches.homeTeamId,
+        awayTeamId: matches.awayTeamId,
+        groupName: groups.name,
+        editionName: editions.name,
+        editionId: matchdays.editionId,
+        homeTeam: {
+          name: sql<string>`ht.name`,
+          shortName: sql<string | null>`ht.short_name`,
+          logoUrl: sql<string | null>`ht.logo_url`,
+          primaryColor: sql<string | null>`ht.primary_color`,
+        },
+        awayTeam: {
+          name: sql<string>`at.name`,
+          shortName: sql<string | null>`at.short_name`,
+          logoUrl: sql<string | null>`at.logo_url`,
+        },
+        venue: { name: venues.name },
+      })
+      .from(matches)
+      .innerJoin(matchdays, eq(matchdays.id, matches.matchdayId))
+      .innerJoin(editions, eq(editions.id, matchdays.editionId))
+      .leftJoin(groups, eq(groups.id, matches.groupId))
+      .leftJoin(sql`teams ht`, sql`ht.id = ${matches.homeTeamId}`)
+      .leftJoin(sql`teams at`, sql`at.id = ${matches.awayTeamId}`)
+      .leftJoin(venues, eq(venues.id, matches.venueId))
+      .where(
+        and(
+          or(inArray(matches.homeTeamId, teamIds), inArray(matches.awayTeamId, teamIds)),
+          or(
+            eq(matches.status, 'live'),
+            and(eq(matches.status, 'scheduled'), sql`${matches.scheduledAt} >= now() - interval '3 hours'`),
+          ),
+        ),
+      )
+      // live primero; luego el más próximo por fecha
+      .orderBy(sql`case when ${matches.status} = 'live' then 0 else 1 end`, asc(matches.scheduledAt))
+
+    // Un partido por equipo del usuario (el primero según el orden anterior).
+    const teamSet = new Set(teamIds)
+    const seen = new Set<string>()
+    const out: typeof rows = []
+    for (const m of rows) {
+      const myTeamId = teamSet.has(m.homeTeamId ?? '') ? m.homeTeamId : m.awayTeamId
+      if (!myTeamId || seen.has(myTeamId)) continue
+      seen.add(myTeamId)
+      out.push({ ...m, teamId: myTeamId } as any)
+    }
+    return out
   }
 
   /**
@@ -320,10 +648,29 @@ export class MobilePlayersService {
       birthYear?: number
       avatarUrl?: string
       docNumber?: string
+      phone?: string
+      instagram?: string
+      tiktok?: string
+      facebook?: string
+      twitter?: string
     },
   ) {
     // Ensure profile exists
     await this.myProfile(uid)
+
+    // Normaliza handles de redes: quita @, espacios y URL; guarda solo el usuario.
+    const handle = (v?: string) => {
+      if (v === undefined) return undefined
+      const s = v.trim().replace(/^@+/, '').replace(/\s+/g, '')
+      if (!s) return null
+      // si pegan una URL, toma el último segmento no vacío
+      const m = s.match(/[^/]+$/)
+      return (m ? m[0] : s).slice(0, 40)
+    }
+    if ('instagram' in dto) dto.instagram = handle(dto.instagram) as any
+    if ('tiktok' in dto) dto.tiktok = handle(dto.tiktok) as any
+    if ('facebook' in dto) dto.facebook = handle(dto.facebook) as any
+    if ('twitter' in dto) dto.twitter = handle(dto.twitter) as any
 
     const { position, docNumber, ...rest } = dto
     try {
@@ -345,10 +692,13 @@ export class MobilePlayersService {
 
       return updated
     } catch (err: any) {
-      if (err?.code === '23505' && err?.constraint?.includes('username')) {
+      // drizzle-orm envuelve el error de Postgres en DrizzleQueryError; el code/constraint
+      // reales viven en err.cause. Revisamos ambos para mapear las violaciones únicas a 409.
+      const pg = err?.cause ?? err
+      if (pg?.code === '23505' && pg?.constraint?.includes('username')) {
         throw new ConflictException('Este username ya esta en uso')
       }
-      if (err?.code === '23505' && err?.constraint?.includes('doc_number')) {
+      if (pg?.code === '23505' && pg?.constraint?.includes('doc_number')) {
         throw new ConflictException('Este numero de documento ya esta registrado por otro usuario')
       }
       throw err
@@ -557,6 +907,18 @@ export class MobilePlayersService {
       .set({ followersCount: sql`${playerProfiles.followersCount} + 1` })
       .where(eq(playerProfiles.uid, targetUid))
 
+    // Notificación "nuevo seguidor" (best-effort)
+    const [me] = await this.db
+      .select({ fullName: playerProfiles.fullName, username: playerProfiles.username })
+      .from(playerProfiles)
+      .where(eq(playerProfiles.uid, myUid))
+    await this.notifications.createFor([targetUid], {
+      type: 'social',
+      title: 'Nuevo seguidor',
+      body: `${me?.fullName ?? me?.username ?? 'Alguien'} empezó a seguirte`,
+      data: { kind: 'profile', uid: myUid },
+    })
+
     return { followed: true }
   }
 
@@ -590,21 +952,87 @@ export class MobilePlayersService {
   }
 
   /**
-   * Delete the authenticated user's account.
+   * Deactivate the authenticated user's account (soft delete).
+   * Sets deactivatedAt timestamp and disables the Firebase Auth user.
+   */
+  async deactivateAccount(uid: string) {
+    await this.db
+      .update(playerProfiles)
+      .set({ deactivatedAt: new Date() })
+      .where(eq(playerProfiles.uid, uid))
+
+    // Disable Firebase Auth user (don't delete)
+    try {
+      await admin.auth().updateUser(uid, { disabled: true })
+    } catch {
+      // best-effort
+    }
+
+    return { deactivated: true }
+  }
+
+  /**
+   * Permanently and completely delete the authenticated user's account.
+   * Deletes the Firebase Auth user (so the account no longer exists and the user
+   * can never sign in again) and removes the user's data: profile, social graph,
+   * team memberships and avatar file. This is irreversible.
    */
   async deleteAccount(uid: string) {
-    // Delete profile (cascades follows via app logic)
-    await this.db.delete(follows).where(
-      or(eq(follows.followerUid, uid), eq(follows.followedUid, uid)),
-    )
-    await this.db.delete(playerProfiles).where(eq(playerProfiles.uid, uid))
-
-    // Delete Firebase Auth user
+    // Delete the Firebase Auth user first — this is what blocks any future sign-in.
+    // Surface real failures (only ignore "already gone") so we never report a
+    // successful deletion while the account still exists.
     try {
       await admin.auth().deleteUser(uid)
-    } catch {
-      // User might already be deleted from Firebase
+    } catch (e: any) {
+      if (e?.code !== 'auth/user-not-found') throw e
     }
+
+    // Remove avatar file from storage (best-effort)
+    const [profile] = await this.db
+      .select({ avatarUrl: playerProfiles.avatarUrl })
+      .from(playerProfiles)
+      .where(eq(playerProfiles.uid, uid))
+
+    if (profile?.avatarUrl) {
+      try {
+        await this.storage.deleteFile(profile.avatarUrl)
+      } catch {
+        // best-effort
+      }
+    }
+
+    // Keep follower/following counts consistent on other users before removing edges
+    const followed = await this.db
+      .select({ uid: follows.followedUid })
+      .from(follows)
+      .where(eq(follows.followerUid, uid))
+    const followers = await this.db
+      .select({ uid: follows.followerUid })
+      .from(follows)
+      .where(eq(follows.followedUid, uid))
+
+    const followedUids = followed.map((r) => r.uid)
+    const followerUids = followers.map((r) => r.uid)
+
+    if (followedUids.length) {
+      await this.db
+        .update(playerProfiles)
+        .set({ followersCount: sql`GREATEST(${playerProfiles.followersCount} - 1, 0)` })
+        .where(inArray(playerProfiles.uid, followedUids))
+    }
+    if (followerUids.length) {
+      await this.db
+        .update(playerProfiles)
+        .set({ followingCount: sql`GREATEST(${playerProfiles.followingCount} - 1, 0)` })
+        .where(inArray(playerProfiles.uid, followerUids))
+    }
+
+    // Remove the user's data
+    await this.db
+      .delete(follows)
+      .where(or(eq(follows.followerUid, uid), eq(follows.followedUid, uid)))
+    await this.db.delete(teamMembers).where(eq(teamMembers.playerUid, uid))
+    await this.db.delete(playerProfiles).where(eq(playerProfiles.uid, uid))
 
     return { deleted: true }
   }
