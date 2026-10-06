@@ -11,12 +11,12 @@ import { clsx } from 'clsx'
 import {
   getEdition,
   getLeague,
+  normalizeFormatConfig,
   DEFAULT_TIEBREAKERS,
   TIEBREAKER_LABEL,
+  PHASE_KIND_LABEL,
   type EditionFromApi,
-  type FormatConfig,
   type PhaseGroups,
-  type PhaseRoundRobin,
   type PhaseKnockout,
   type PhaseMultiCup,
   type TiebreakerRules,
@@ -186,7 +186,7 @@ function fmtMoney(amount: number, currency: string): string {
 
 function ConfigSummary({ edition }: { edition: EditionFromApi }) {
   const status = STATUSES.find((s) => s.value === edition.status)
-  const cfg = (edition.formatConfig ?? {}) as FormatConfig
+  const cfg = normalizeFormatConfig(edition.formatConfig as Record<string, unknown>)
   const fmt = FORMAT_TEMPLATES.find((f) => f.id === cfg.type)
   const tb: TiebreakerRules = edition.tiebreakerRules ?? DEFAULT_TIEBREAKERS
   // Primary criterion is always points; the rest are the ordered tiebreakers.
@@ -220,29 +220,15 @@ function ConfigSummary({ edition }: { edition: EditionFromApi }) {
                 <span>{fmt.icon}</span> {fmt.label}
               </p>
               <div className="mt-2 space-y-1">
-                {cfg.phase1 && 'groupCount' in cfg.phase1 && (
-                  <p className="text-xs text-slate-500">
-                    {(cfg.phase1 as PhaseGroups).groupCount} grupos · {(cfg.phase1 as PhaseGroups).teamsPerGroup} eq. c/u · clasifican {(cfg.phase1 as PhaseGroups).qualifiersPerGroup}
+                {cfg.phases.map((phase, i) => (
+                  <p key={i} className="text-xs text-slate-500">
+                    Fase {i + 1}: {PHASE_KIND_LABEL[phase.kind]}
+                    {phase.kind === 'groups' && ` · ${(phase as PhaseGroups).groupCount} grupos · ${(phase as PhaseGroups).teamsPerGroup} eq. c/u · clasifican ${(phase as PhaseGroups).qualifiersPerGroup}`}
+                    {phase.kind === 'round_robin' && (phase.doubleLeg ? ' · ida y vuelta' : '')}
+                    {phase.kind === 'knockout' && ` · bracket de ${(phase as PhaseKnockout).bracketSize}${(phase as PhaseKnockout).hasThirdPlace ? ' · 3° lugar' : ''}${(phase as PhaseKnockout).hasRepechage ? ' · repechaje' : ''}`}
+                    {phase.kind === 'multi_cup' && ` · ${(phase as PhaseMultiCup).cups.length} copas${(phase as PhaseMultiCup).cups.length > 0 ? `: ${(phase as PhaseMultiCup).cups.map((c) => c.name).join(', ')}` : ''}`}
                   </p>
-                )}
-                {cfg.phase1 && 'kind' in cfg.phase1 && cfg.phase1.kind === 'round_robin' && (
-                  <p className="text-xs text-slate-500">
-                    Todos contra todos{(cfg.phase1 as PhaseRoundRobin).doubleLeg ? ' · ida y vuelta' : ''}
-                  </p>
-                )}
-                {cfg.phase2 && 'bracketSize' in cfg.phase2 && (
-                  <p className="text-xs text-slate-500">
-                    Bracket de {(cfg.phase2 as PhaseKnockout).bracketSize} equipos
-                    {(cfg.phase2 as PhaseKnockout).hasThirdPlace ? ' · 3° lugar' : ''}
-                    {(cfg.phase2 as PhaseKnockout).hasRepechage ? ' · repechaje' : ''}
-                  </p>
-                )}
-                {cfg.phase2 && 'cups' in cfg.phase2 && (
-                  <p className="text-xs text-slate-500">
-                    {(cfg.phase2 as PhaseMultiCup).cups.length} copas
-                    {(cfg.phase2 as PhaseMultiCup).cups.length > 0 && `: ${(cfg.phase2 as PhaseMultiCup).cups.map((c) => c.name).join(', ')}`}
-                  </p>
-                )}
+                ))}
               </div>
             </>
           ) : (

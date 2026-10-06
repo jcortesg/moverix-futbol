@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 
-const PUBLIC_PATHS = ['/login', '/registro', '/t/', '/campeonatos']
+const PUBLIC_PATHS = ['/login', '/registro', '/t/', '/campeonatos', '/i/', '/privacidad', '/terminos']
 const AUTH_REDIRECT_PATHS = ['/login', '/registro']
 const AUTH_ONLY_PATHS = ['/onboarding']
 const PUBLIC_HOSTS = ['futbol.moverix.co']
@@ -32,6 +32,12 @@ export function middleware(request: NextRequest) {
   // Autenticado intentando acceder a login/registro → ir al dashboard
   // En el host publico, ir a /campeonatos en vez de /
   if (isAuthenticated && isAuthRedirectPath && !isAuthOnlyPath) {
+    // Con sesión abierta y un destino explícito (?redirect=/dirigir), se
+    // respeta: si no, un delegado invitado terminaba en /campeonatos.
+    const wanted = request.nextUrl.searchParams.get('redirect')
+    if (wanted && wanted.startsWith('/') && !AUTH_REDIRECT_PATHS.some((p) => wanted.startsWith(p))) {
+      return NextResponse.redirect(new URL(wanted, request.url))
+    }
     const redirectTo = isPublicHost ? '/campeonatos' : '/'
     return NextResponse.redirect(new URL(redirectTo, request.url))
   }
@@ -40,5 +46,5 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/((?!_next/static|_next/image|favicon.ico|.*\\.png$).*)'],
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|embed.js|.*\\.png$).*)'],
 }

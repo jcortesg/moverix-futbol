@@ -21,6 +21,7 @@ import {
   type PublicEditionData,
   getDirectorRoster,
   addDirectorPlayer,
+  uploadDirectorPlayerDocument,
   type RosterPlayer,
 } from '@/lib/public-api'
 import { inputCls } from '@/components/ui/form'
@@ -124,35 +125,54 @@ function AddPlayerForm({
   const [firstName, setFirstName] = useState('')
   const [lastName, setLastName] = useState('')
   const [docNumber, setDocNumber] = useState('')
+  const [birthDate, setBirthDate] = useState('')
+  const [employer, setEmployer] = useState('')
+  const [healthProvider, setHealthProvider] = useState('')
   const [phone, setPhone] = useState('')
   const [email, setEmail] = useState('')
   const [position, setPosition] = useState('')
   const [jerseyNumber, setJerseyNumber] = useState('')
+  const [emergencyName, setEmergencyName] = useState('')
+  const [emergencyPhone, setEmergencyPhone] = useState('')
+  const [docFile, setDocFile] = useState<File | null>(null)
+  const docFileRef = useRef<HTMLInputElement>(null)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
 
   function resetForm() {
     setPlayerName(''); setFirstName(''); setLastName('')
-    setDocNumber(''); setPhone(''); setEmail('')
-    setPosition(''); setJerseyNumber(''); setError('')
+    setDocNumber(''); setBirthDate(''); setEmployer(''); setHealthProvider('')
+    setPhone(''); setEmail('')
+    setPosition(''); setJerseyNumber('')
+    setEmergencyName(''); setEmergencyPhone('')
+    setDocFile(null); if (docFileRef.current) docFileRef.current.value = ''
+    setError('')
   }
 
   async function handleAdd(e: React.FormEvent) {
     e.preventDefault()
     if (!playerName.trim()) { setError('El nombre es obligatorio'); return }
+    if (!docNumber.trim()) { setError('La cédula es obligatoria'); return }
+    if (!docFile) { setError('Debes adjuntar la cédula (imagen o fotocopia)'); return }
     setSubmitting(true); setError('')
     try {
-      await addDirectorPlayer({
+      const created = await addDirectorPlayer({
         registrationId,
         playerName: playerName.trim(),
         firstName: firstName.trim() || undefined,
         lastName: lastName.trim() || undefined,
-        docNumber: docNumber.trim() || undefined,
+        docNumber: docNumber.trim(),
+        birthDate: birthDate || undefined,
+        employer: employer.trim() || undefined,
+        healthProvider: healthProvider.trim() || undefined,
         phone: phone.trim() || undefined,
         email: email.trim() || undefined,
         position: position || undefined,
         jerseyNumber: jerseyNumber ? parseInt(jerseyNumber) : undefined,
+        emergencyContactName: emergencyName.trim() || undefined,
+        emergencyContactPhone: emergencyPhone.trim() || undefined,
       })
+      await uploadDirectorPlayerDocument(created.id, docFile)
       resetForm(); setOpen(false); onAdded()
     } catch (err: any) {
       setError(err?.response?.data?.message || 'Error al agregar jugador')
@@ -198,15 +218,43 @@ function AddPlayerForm({
           <input value={lastName} onChange={(e) => setLastName(e.target.value)} placeholder="Apellidos" className={inputCls} />
         </div>
         <div className="grid grid-cols-2 gap-2">
-          <input value={docNumber} onChange={(e) => setDocNumber(e.target.value)} placeholder="Cedula" className={inputCls} />
-          <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Telefono" className={inputCls} />
+          <input value={docNumber} onChange={(e) => setDocNumber(e.target.value)} placeholder="Cédula *" className={inputCls} required />
+          <input type="date" value={birthDate} onChange={(e) => setBirthDate(e.target.value)} placeholder="Fecha de nacimiento" className={inputCls} />
         </div>
-        <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" className={inputCls} />
+        <div className="grid grid-cols-2 gap-2">
+          <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Telefono" className={inputCls} />
+          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" className={inputCls} />
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <input value={employer} onChange={(e) => setEmployer(e.target.value)} placeholder="Empresa donde labora" className={inputCls} />
+          <input value={healthProvider} onChange={(e) => setHealthProvider(e.target.value)} placeholder="EPS" className={inputCls} />
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <input value={emergencyName} onChange={(e) => setEmergencyName(e.target.value)} placeholder="Contacto emergencia" className={inputCls} />
+          <input type="tel" value={emergencyPhone} onChange={(e) => setEmergencyPhone(e.target.value)} placeholder="Tel. emergencia" className={inputCls} />
+        </div>
         <div className="grid grid-cols-2 gap-2">
           <select value={position} onChange={(e) => setPosition(e.target.value)} className={inputCls + ' appearance-none'}>
             {POSITIONS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
           </select>
           <input type="number" min={1} max={99} value={jerseyNumber} onChange={(e) => setJerseyNumber(e.target.value)} placeholder="Dorsal" className={inputCls} />
+        </div>
+        <div>
+          <input
+            ref={docFileRef}
+            type="file"
+            accept="application/pdf,image/jpeg,image/png,image/webp,image/heic"
+            onChange={(e) => setDocFile(e.target.files?.[0] ?? null)}
+            className="hidden"
+          />
+          <button
+            type="button"
+            onClick={() => docFileRef.current?.click()}
+            className="w-full py-2.5 border-2 border-dashed border-slate-200 rounded-xl text-sm font-medium text-slate-500 hover:border-green-300 hover:text-green-600 transition-colors flex items-center justify-center gap-2"
+          >
+            <Upload size={14} />
+            {docFile ? docFile.name : 'Adjuntar cédula (imagen o fotocopia) *'}
+          </button>
         </div>
         <button type="submit" disabled={submitting} className="w-full py-2.5 bg-green-600 text-white font-semibold rounded-xl hover:bg-green-700 disabled:opacity-50 transition-colors flex items-center justify-center gap-2 text-sm">
           {submitting ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />}
@@ -242,10 +290,11 @@ function CreateTeamModal({ open, onClose, onCreated }: {
   }
 
   async function onSubmit(data: NewTeamForm) {
+    if (!logoFile) { setError('El logo del equipo es obligatorio'); return }
     setSubmitting(true); setError('')
     try {
       let team = await createTeam({ name: data.name, city: data.city || 'Bogota' })
-      if (logoFile) team = await uploadTeamLogo(team.id, logoFile)
+      team = await uploadTeamLogo(team.id, logoFile)
       reset(); setLogoFile(null); setLogoPreview(null)
       onCreated(team)
     } catch (err: any) {
@@ -276,7 +325,7 @@ function CreateTeamModal({ open, onClose, onCreated }: {
               {logoPreview ? <img src={logoPreview} alt="Logo" className="w-full h-full object-cover" /> : <Upload size={24} className="text-slate-300" />}
             </button>
             <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleLogoChange} />
-            <p className="text-xs text-slate-400">Logo del equipo (opcional)</p>
+            <p className="text-xs text-slate-400">Logo del equipo <span className="text-red-500">*</span></p>
           </div>
           <div>
             <label className="block text-sm font-semibold text-slate-700 mb-1.5">Nombre del equipo *</label>

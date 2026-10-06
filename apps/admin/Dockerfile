@@ -1,5 +1,5 @@
 FROM node:20-alpine AS base
-RUN npm install -g pnpm
+RUN npm install -g pnpm@9.0.0
 
 # ─── Dependencias ────────────────────────────────────────────────────────────
 FROM base AS deps
@@ -57,6 +57,9 @@ RUN addgroup --system --gid 1001 nodejs && adduser --system --uid 1001 nextjs
 COPY --from=builder --chown=nextjs:nodejs /app/apps/admin/.next/standalone ./
 # Static assets van bajo la ruta que Next espera dentro del standalone
 COPY --from=builder --chown=nextjs:nodejs /app/apps/admin/.next/static ./apps/admin/.next/static
+# Archivos estáticos servidos tal cual (p.ej. embed.js, el widget para webs
+# externas). El standalone NO los incluye, hay que copiarlos aparte.
+COPY --from=builder --chown=nextjs:nodejs /app/apps/admin/public ./apps/admin/public
 
 USER nextjs
 EXPOSE 3000

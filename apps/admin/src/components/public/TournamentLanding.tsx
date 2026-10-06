@@ -285,7 +285,7 @@ export function TournamentLanding({ slug }: { slug: string }) {
                 INSCRIBIR MI EQUIPO
               </button>
               <p className="text-xs text-white/30 mt-4">
-                {data.teams.length} de {data.maxTeams} equipos inscritos
+                {data.teamsCount} de {data.maxTeams} equipos inscritos
               </p>
             </div>
           </div>

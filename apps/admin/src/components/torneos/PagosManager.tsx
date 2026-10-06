@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import {
   AlertCircle, ChevronLeft, Loader2, Shield, CheckCircle2, XCircle,
-  Plus, TrendingUp, TrendingDown, Wallet, Ban, Trash2, X, Save, Pencil, Receipt,
+  Plus, TrendingUp, TrendingDown, Wallet, Ban, Trash2, X, Save, Pencil, Receipt, Download,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import {
@@ -29,6 +29,9 @@ import { getRegistrationsByEdition, type RegistrationFromApi } from '@/lib/regis
 import { getRosterByRegistration, type RegistrationPlayerFromApi } from '@/lib/registration-players'
 import { getMatchesByEdition, type MatchFromApi } from '@/lib/matches'
 import { getEdition, type EditionFromApi } from '@/lib/leagues'
+import { getPlayerStatsByEdition } from '@/lib/player-stats'
+import { getEventsByMatch, type MatchEventFromApi } from '@/lib/match-events'
+import { downloadFinesExcel, type CardStat, type CardDetail } from '@/lib/fines-excel'
 import { Field, inputCls } from '@/components/ui/form'
 
 type Tab = 'registrations' | 'fines' | 'all'
@@ -180,6 +183,51 @@ export function PagosManager({
           onStatusChange={async (id, status) => {
             await updateFine(id, { status })
             await reload()
+          }}
+          onDownload={async () => {
+            // Nombres de equipo por id (desde las inscripciones) para las tarjetas.
+            const teamName = new Map(registrations.map((r) => [r.team.id, r.team.name]))
+            const stats = await getPlayerStatsByEdition(editionId).catch(() => [])
+            const cards: CardStat[] = stats.map((s) => ({
+              playerName: s.playerName,
+              teamName: teamName.get(s.teamId) ?? '',
+              yellow: s.yellowCards,
+              red: s.redCards,
+              matchesPlayed: s.matchesPlayed,
+            }))
+            // Detalle por partido: eventos de tarjeta de cada partido finalizado.
+            const played = matches.filter((m) => m.status === 'finished' || m.status === 'live')
+            const eventsPerMatch = await Promise.all(
+              played.map((m) =>
+                getEventsByMatch(m.id)
+                  .then((evs) => ({ m, evs }))
+                  .catch(() => ({ m, evs: [] as MatchEventFromApi[] })),
+              ),
+            )
+            const cardDetails: CardDetail[] = []
+            for (const { m, evs } of eventsPerMatch) {
+              const home = m.homeTeamId ? teamName.get(m.homeTeamId) ?? 'Local' : 'Local'
+              const away = m.awayTeamId ? teamName.get(m.awayTeamId) ?? 'Visitante' : 'Visitante'
+              for (const e of evs) {
+                if (e.eventType !== 'yellow_card' && e.eventType !== 'red_card') continue
+                cardDetails.push({
+                  playerName: e.playerName ?? '(jugador)',
+                  teamName: e.teamId === m.homeTeamId ? home : e.teamId === m.awayTeamId ? away : '',
+                  type: e.eventType,
+                  minute: e.minute,
+                  matchLabel: `${home} vs ${away}`,
+                  matchdayNumber: m.matchdayNumber ?? null,
+                  date: m.scheduledAt ?? null,
+                })
+              }
+            }
+            downloadFinesExcel({
+              editionName: edition?.name ?? 'Campeonato',
+              currency,
+              fines,
+              cards,
+              cardDetails,
+            })
           }}
         />
       )}
@@ -453,7 +501,7 @@ function PaidStatusPill({ status }: { status: 'paid' | 'partial' | 'pending' }) 
 // ─── Tab: Fines ──────────────────────────────────────────────────────────────
 
 function FinesTab({
-  fines, currency, onCreate, onEdit, onDelete, onStatusChange,
+  fines, currency, onCreate, onEdit, onDelete, onStatusChange, onDownload,
 }: {
   fines: FineFromApi[]
   currency: string
@@ -461,10 +509,19 @@ function FinesTab({
   onEdit: (f: FineFromApi) => void
   onDelete: (id: string) => Promise<void>
   onStatusChange: (id: string, status: FineStatus) => Promise<void>
+  onDownload: () => Promise<void>
 }) {
+  const [downloading, setDownloading] = useState(false)
   return (
     <div>
-      <div className="flex justify-end mb-3">
+      <div className="flex justify-end gap-2 mb-3">
+        <button
+          onClick={async () => { setDownloading(true); try { await onDownload() } finally { setDownloading(false) } }}
+          disabled={downloading}
+          className="flex items-center gap-2 px-3 py-1.5 bg-white border border-slate-200 text-slate-700 text-xs font-bold rounded-xl hover:bg-slate-50 transition-all shadow-sm disabled:opacity-50"
+        >
+          <Download size={12} /> {downloading ? 'Generando…' : 'Descargar Excel'}
+        </button>
         <button
           onClick={onCreate}
           className="flex items-center gap-2 px-3 py-1.5 bg-red-600 text-white text-xs font-bold rounded-xl hover:bg-red-700 transition-all shadow-sm"

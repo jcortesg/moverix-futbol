@@ -8,6 +8,10 @@ export type RefereeFromApi = {
   phone: string | null
   photoUrl: string | null
   licenseNumber: string | null
+  /** Correo con el que vincula su cuenta para dirigir partidos. */
+  email: string | null
+  /** referee | delegate | both */
+  role: string
   createdAt: string
   updatedAt: string
 }
@@ -17,6 +21,8 @@ export type CreateRefereeDto = {
   fullName: string
   phone?: string
   licenseNumber?: string
+  email?: string
+  role?: 'referee' | 'delegate' | 'both'
   uid?: string
 }
 

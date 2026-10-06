@@ -6,7 +6,7 @@ import Link from 'next/link'
 import {
   ChevronLeft, Loader2, AlertCircle, Plus, Search, Users, Shield,
   CheckCircle2, XCircle, UserMinus, MoreVertical, X, DollarSign,
-  Upload, Mail,
+  Upload, Mail, Lock, Unlock, RotateCcw,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import {
@@ -18,15 +18,16 @@ import {
   type RegistrationFromApi,
   type RegistrationStatus,
 } from '@/lib/registrations'
-import { searchTeams, createTeam, uploadTeamLogo, type TeamFromApi } from '@/lib/teams'
+import { searchTeams, createTeam, updateTeam, uploadTeamLogo, type TeamFromApi } from '@/lib/teams'
 import { resizeImage } from '@/lib/image'
 import { getGroupsByEdition, type GroupFromApi } from '@/lib/groups'
-import { getEdition, type EditionFromApi } from '@/lib/leagues'
+import { getEdition, updateEdition, type EditionFromApi } from '@/lib/leagues'
 import { Field, inputCls } from '@/components/ui/form'
 
 // ─── Status helpers ──────────────────────────────────────────────────────────
 
 const STATUS_STYLE: Record<RegistrationStatus, { label: string; bg: string; text: string; dot: string }> = {
+  draft:     { label: 'Borrador',   bg: 'bg-slate-50 border-slate-200',  text: 'text-slate-600',  dot: 'bg-slate-400' },
   pending:   { label: 'Pendiente',  bg: 'bg-amber-50 border-amber-200',  text: 'text-amber-700',  dot: 'bg-amber-500' },
   approved:  { label: 'Aprobado',   bg: 'bg-green-50 border-green-200',  text: 'text-green-700',  dot: 'bg-green-500' },
   rejected:  { label: 'Rechazado',  bg: 'bg-red-50 border-red-200',      text: 'text-red-700',    dot: 'bg-red-500' },
@@ -76,7 +77,7 @@ export function EquiposManager({
   }, [registrations, filter])
 
   const counts = useMemo(() => {
-    const out = { all: registrations.length, pending: 0, approved: 0, rejected: 0, withdrawn: 0 }
+    const out = { all: registrations.length, draft: 0, pending: 0, approved: 0, rejected: 0, withdrawn: 0 }
     for (const r of registrations) out[r.status]++
     return out
   }, [registrations])
@@ -95,6 +96,50 @@ export function EquiposManager({
     if (!confirm('¿Quitar este equipo de la edición? No borra al equipo, sólo su inscripción.')) return
     await deleteRegistration(id)
     setRegistrations((prev) => prev.filter((r) => r.id !== id))
+  }
+
+  const [togglingReg, setTogglingReg] = useState(false)
+  async function toggleRegistrations() {
+    if (!edition) return
+    const next = !edition.registrationsOpen
+    if (!confirm(next ? '¿Abrir inscripciones? Los equipos podrán inscribirse.' : '¿Cerrar inscripciones? Ningún equipo nuevo podrá inscribirse.')) return
+    setTogglingReg(true)
+    try {
+      const updated = await updateEdition(editionId, { registrationsOpen: next })
+      setEdition((prev) => (prev ? { ...prev, registrationsOpen: updated.registrationsOpen } : prev))
+    } finally {
+      setTogglingReg(false)
+    }
+  }
+
+  const [togglingRoster, setTogglingRoster] = useState(false)
+  /** Cierre GENERAL de nóminas: manda sobre el candado de cada equipo. */
+  async function toggleRosters() {
+    if (!edition) return
+    const next = !edition.rostersLocked
+    if (!confirm(next
+      ? '¿Cerrar las nóminas del campeonato? Ningún equipo podrá agregar, quitar ni editar jugadores.'
+      : '¿Abrir las nóminas? Los equipos volverán a editar su plantilla (salvo los cerrados individualmente).')) return
+    setTogglingRoster(true)
+    try {
+      const updated = await updateEdition(editionId, { rostersLocked: next })
+      setEdition((prev) => (prev ? { ...prev, rostersLocked: updated.rostersLocked } : prev))
+    } finally {
+      setTogglingRoster(false)
+    }
+  }
+
+  /**
+   * Candado por equipo con tres estados. `value`:
+   *   null  -> hereda el cierre general
+   *   true  -> cerrada siempre
+   *   false -> abierta aunque el general esté cerrado
+   */
+  async function setTeamRoster(reg: RegistrationFromApi, value: boolean | null) {
+    const updated = await updateRegistration(reg.id, { rosterLocked: value })
+    setRegistrations((prev) =>
+      prev.map((r) => (r.id === reg.id ? { ...r, rosterLocked: updated.rosterLocked } : r)),
+    )
   }
 
   if (loading) {
@@ -128,6 +173,36 @@ export function EquiposManager({
         <span className="text-slate-300">/</span>
         <span className="text-sm font-semibold text-slate-900">Equipos</span>
         <div className="flex-1" />
+        <button
+          onClick={toggleRegistrations}
+          disabled={togglingReg}
+          className={clsx(
+            'flex items-center gap-2 px-3 py-2 text-xs font-bold rounded-xl border transition-all disabled:opacity-50',
+            edition.registrationsOpen
+              ? 'border-green-200 text-green-700 bg-green-50 hover:bg-green-100'
+              : 'border-red-200 text-red-700 bg-red-50 hover:bg-red-100',
+          )}
+          title={edition.registrationsOpen ? 'Inscripciones abiertas — clic para cerrar' : 'Inscripciones cerradas — clic para abrir'}
+        >
+          {togglingReg ? <Loader2 size={13} className="animate-spin" /> : edition.registrationsOpen ? <Unlock size={13} /> : <Lock size={13} />}
+          Inscripciones: {edition.registrationsOpen ? 'Abiertas' : 'Cerradas'}
+        </button>
+        <button
+          onClick={toggleRosters}
+          disabled={togglingRoster}
+          className={clsx(
+            'flex items-center gap-2 px-3 py-2 text-xs font-bold rounded-xl border transition-all disabled:opacity-50',
+            edition.rostersLocked
+              ? 'border-red-200 text-red-700 bg-red-50 hover:bg-red-100'
+              : 'border-green-200 text-green-700 bg-green-50 hover:bg-green-100',
+          )}
+          title={edition.rostersLocked
+            ? 'Nóminas cerradas para todos — clic para abrir'
+            : 'Nóminas abiertas — clic para cerrar todas'}
+        >
+          {togglingRoster ? <Loader2 size={13} className="animate-spin" /> : edition.rostersLocked ? <Lock size={13} /> : <Unlock size={13} />}
+          Nóminas: {edition.rostersLocked ? 'Cerradas' : 'Abiertas'}
+        </button>
         <button
           onClick={() => setAddOpen(true)}
           className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white text-sm font-bold rounded-xl hover:bg-green-700 transition-all shadow-sm active:scale-[0.98]"
@@ -195,6 +270,7 @@ export function EquiposManager({
             <thead className="bg-slate-50 border-b border-slate-100">
               <tr>
                 <th className="text-left text-[10px] font-bold text-slate-500 uppercase tracking-widest px-5 py-3">Equipo</th>
+                <th className="text-left text-[10px] font-bold text-slate-500 uppercase tracking-widest px-5 py-3">Plantilla</th>
                 <th className="text-left text-[10px] font-bold text-slate-500 uppercase tracking-widest px-5 py-3">Estado</th>
                 <th className="text-left text-[10px] font-bold text-slate-500 uppercase tracking-widest px-5 py-3">Pago</th>
                 <th className="text-left text-[10px] font-bold text-slate-500 uppercase tracking-widest px-5 py-3">Grupo</th>
@@ -210,6 +286,8 @@ export function EquiposManager({
                   onPatch={(patch) => patchRegistration(reg.id, patch)}
                   onMarkPaid={() => handlePaid(reg.id)}
                   onDelete={() => handleDelete(reg.id)}
+                  onSetRoster={(v) => setTeamRoster(reg, v)}
+                  rostersLockedGlobally={!!edition.rostersLocked}
                 />
               ))}
             </tbody>
@@ -253,13 +331,15 @@ function FilterChip({ label, active, onClick }: { label: string; active: boolean
 // ─── Row ─────────────────────────────────────────────────────────────────────
 
 function RegistrationRow({
-  reg, groups, onPatch, onMarkPaid, onDelete,
+  reg, groups, onPatch, onMarkPaid, onDelete, onSetRoster, rostersLockedGlobally,
 }: {
   reg: RegistrationFromApi
   groups: GroupFromApi[]
   onPatch: (patch: Parameters<typeof updateRegistration>[1]) => Promise<void>
   onMarkPaid: () => Promise<void>
   onDelete: () => Promise<void>
+  onSetRoster: (value: boolean | null) => Promise<void>
+  rostersLockedGlobally: boolean
 }) {
   const [busy, setBusy] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
@@ -290,12 +370,69 @@ function RegistrationRow({
             </div>
           )}
           <div className="min-w-0">
-            <p className="text-sm font-semibold text-slate-900 truncate hover:text-green-700 transition-colors">{reg.team.name}</p>
+            <p className="text-sm font-semibold text-slate-900 truncate hover:text-green-700 transition-colors">
+              {reg.team.name}
+              {/* El cierre general manda: si está activo, la nómina está cerrada
+                  aunque el candado del equipo esté abierto. */}
+              {(reg.rosterLocked ?? rostersLockedGlobally) ? (
+                <span
+                  className="ml-1.5 inline-flex items-center align-middle text-amber-600"
+                  title={reg.rosterLocked === true
+                    ? 'Nómina cerrada solo para este equipo'
+                    : 'Nóminas cerradas en todo el campeonato'}
+                >
+                  <Lock size={11} />
+                </span>
+              ) : reg.rosterLocked === false && rostersLockedGlobally ? (
+                <span
+                  className="ml-1.5 inline-flex items-center align-middle text-green-600"
+                  title="Excepción: nómina abierta pese al cierre general"
+                >
+                  <Unlock size={11} />
+                </span>
+              ) : null}
+            </p>
             <p className="text-xs text-slate-400 truncate">
               {reg.team.shortName ?? reg.team.city ?? '—'}
             </p>
+            {reg.team.pendingDelegateEmail && (
+              <p className="text-[11px] text-amber-600 truncate flex items-center gap-1" title="Delegado por reclamar">
+                <Mail size={10} /> Por reclamar: {reg.team.pendingDelegateEmail}
+              </p>
+            )}
           </div>
         </Link>
+      </td>
+
+      {/* Plantilla: inscritos, completos y a cuántos les falta algún dato */}
+      <td className="px-5 py-3">
+        {(reg.playersCount ?? 0) === 0 ? (
+          <span className="inline-flex items-center gap-1 text-[11px] font-bold text-slate-400">
+            <Users size={12} /> Sin jugadores
+          </span>
+        ) : (
+          <div className="flex items-center gap-2">
+            <span className="inline-flex items-center gap-1 text-xs font-bold text-slate-700" title="Jugadores inscritos">
+              <Users size={12} /> {reg.playersCount}
+            </span>
+            {(reg.playersComplete ?? 0) > 0 && (
+              <span
+                className="inline-flex items-center gap-0.5 text-[11px] font-bold text-green-700"
+                title={`${reg.playersComplete} con todos los datos completos`}
+              >
+                <CheckCircle2 size={11} /> {reg.playersComplete}
+              </span>
+            )}
+            {(reg.playersIncomplete ?? 0) > 0 && (
+              <span
+                className="inline-flex items-center gap-0.5 text-[11px] font-bold text-amber-700"
+                title={`A ${reg.playersIncomplete} les falta algún dato obligatorio`}
+              >
+                <AlertCircle size={11} /> {reg.playersIncomplete}
+              </span>
+            )}
+          </div>
+        )}
       </td>
 
       {/* Status */}
@@ -366,13 +503,16 @@ function RegistrationRow({
             </>
           )}
           <RowMenu open={menuOpen} onOpenChange={setMenuOpen}>
-            {reg.status !== 'pending' && (
+            {reg.status === 'draft' && (
+              <div className="px-3 py-2 text-[11px] text-slate-400 italic">Esperando que el equipo envíe su plantilla</div>
+            )}
+            {reg.status !== 'pending' && reg.status !== 'draft' && (
               <MenuItem onClick={() => run(() => onPatch({ status: 'pending' }))}>Volver a pendiente</MenuItem>
             )}
-            {reg.status !== 'approved' && (
+            {reg.status !== 'approved' && reg.status !== 'draft' && (
               <MenuItem onClick={() => run(() => onPatch({ status: 'approved' }))}>Aprobar</MenuItem>
             )}
-            {reg.status !== 'rejected' && (
+            {reg.status !== 'rejected' && reg.status !== 'draft' && (
               <MenuItem onClick={() => run(() => onPatch({ status: 'rejected' }))}>Rechazar</MenuItem>
             )}
             {reg.status !== 'withdrawn' && (
@@ -381,6 +521,34 @@ function RegistrationRow({
               </MenuItem>
             )}
             <div className="h-px bg-slate-100" />
+            <MenuItem onClick={() => run(async () => {
+              const current = reg.team.pendingDelegateEmail ?? ''
+              const input = window.prompt(
+                'Email del delegado (si aún no tiene cuenta, se le asignará el equipo cuando se registre):',
+                current,
+              )
+              if (input === null) return
+              await updateTeam(reg.team.id, { directorEmail: input.trim() || undefined })
+            })}>
+              <Mail size={12} /> {reg.team.pendingDelegateEmail ? 'Editar delegado' : 'Asignar delegado'}
+            </MenuItem>
+            <div className="h-px bg-slate-100" />
+            {/* El equipo hereda el cierre general salvo que tenga excepción. */}
+            {reg.rosterLocked === null ? (
+              rostersLockedGlobally ? (
+                <MenuItem onClick={() => run(() => onSetRoster(false))}>
+                  <Unlock size={12} /> Abrir nómina solo a este equipo
+                </MenuItem>
+              ) : (
+                <MenuItem onClick={() => run(() => onSetRoster(true))}>
+                  <Lock size={12} /> Cerrar nómina
+                </MenuItem>
+              )
+            ) : (
+              <MenuItem onClick={() => run(() => onSetRoster(null))}>
+                <RotateCcw size={12} /> Quitar excepción (seguir al campeonato)
+              </MenuItem>
+            )}
             <MenuItem danger onClick={() => run(onDelete)}>Quitar inscripción</MenuItem>
           </RowMenu>
         </div>
@@ -645,6 +813,7 @@ function CreateTab({ editionId, onAdded }: { editionId: string; onAdded: () => v
   async function submit(e: React.FormEvent) {
     e.preventDefault()
     if (name.trim().length < 2) { setError('El nombre debe tener al menos 2 caracteres.'); return }
+    if (!logoFile) { setError('El logo del equipo es obligatorio.'); return }
     setSubmitting(true)
     setError(null)
     try {
@@ -655,12 +824,8 @@ function CreateTab({ editionId, onAdded }: { editionId: string; onAdded: () => v
         primaryColor,
         directorEmail: directorEmail.trim() || undefined,
       })
-      if (logoFile) {
-        try {
-          const resized = await resizeImage(logoFile, { maxSize: 512, quality: 0.9 })
-          await uploadTeamLogo(team.id, resized)
-        } catch { /* non-fatal */ }
-      }
+      const resized = await resizeImage(logoFile, { maxSize: 512, quality: 0.9 })
+      await uploadTeamLogo(team.id, resized)
       await createRegistration({ editionId, teamId: team.id })
       onAdded()
     } catch (err) {
@@ -691,7 +856,7 @@ function CreateTab({ editionId, onAdded }: { editionId: string; onAdded: () => v
           )}
         </div>
         <div className="flex-1">
-          <p className="text-sm font-semibold text-slate-700">Logo (opcional)</p>
+          <p className="text-sm font-semibold text-slate-700">Logo <span className="text-red-500">*</span></p>
           <button
             type="button"
             onClick={() => logoRef.current?.click()}

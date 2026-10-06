@@ -11,6 +11,7 @@ export type TeamFromApi = {
   primaryColor: string | null
   secondaryColor: string | null
   city: string | null
+  pendingDelegateEmail: string | null
   createdAt: string
   updatedAt: string
 }

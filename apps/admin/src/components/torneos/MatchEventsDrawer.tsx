@@ -26,6 +26,8 @@ import {
 } from '@/lib/registrations'
 import type { MatchFromApi } from '@/lib/matches'
 import { Field, inputCls } from '@/components/ui/form'
+import { MatchSummary } from './MatchSummary'
+import { DelegatePicker } from './DelegatePicker'
 
 type TeamRoster = {
   registration: RegistrationFromApi
@@ -48,6 +50,7 @@ export function MatchEventsDrawer({
   const [away, setAway] = useState<TeamRoster | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [mode, setMode] = useState<'summary' | 'edit'>('summary')
 
   async function reload() {
     setEvents(await getEventsByMatch(match.id))
@@ -126,7 +129,7 @@ export function MatchEventsDrawer({
       <aside className="fixed right-0 top-0 h-full w-full max-w-2xl bg-white shadow-2xl z-50 flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
           <div>
-            <h2 className="text-base font-bold text-slate-900">Eventos del partido</h2>
+            <h2 className="text-base font-bold text-slate-900">{mode === 'summary' ? 'Resumen del partido' : 'Editar eventos'}</h2>
             <p className="text-xs text-slate-400 mt-0.5">
               {home?.registration.team.name ?? 'Local'} vs {away?.registration.team.name ?? 'Visitante'}
               {match.status === 'finished' && (
@@ -134,9 +137,26 @@ export function MatchEventsDrawer({
               )}
             </p>
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-700 transition-colors">
-            <X size={18} />
-          </button>
+          <div className="flex items-center gap-2">
+            {/* Toggle Resumen / Editar */}
+            <div className="flex rounded-lg border border-slate-200 p-0.5 text-xs font-semibold">
+              <button
+                onClick={() => setMode('summary')}
+                className={clsx('rounded-md px-2.5 py-1 transition-colors', mode === 'summary' ? 'bg-green-600 text-white' : 'text-slate-500 hover:text-slate-800')}
+              >
+                Resumen
+              </button>
+              <button
+                onClick={() => setMode('edit')}
+                className={clsx('rounded-md px-2.5 py-1 transition-colors', mode === 'edit' ? 'bg-green-600 text-white' : 'text-slate-500 hover:text-slate-800')}
+              >
+                Editar
+              </button>
+            </div>
+            <button onClick={onClose} className="text-slate-400 hover:text-slate-700 transition-colors">
+              <X size={18} />
+            </button>
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto px-5 py-5 space-y-5">
@@ -149,8 +169,26 @@ export function MatchEventsDrawer({
             <div className="flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-600">
               <AlertCircle size={12} /> {error}
             </div>
+          ) : mode === 'summary' ? (
+            <MatchSummary
+              homeTeamName={home?.registration.team.name ?? 'Local'}
+              awayTeamName={away?.registration.team.name ?? 'Visitante'}
+              homeTeamId={match.homeTeamId}
+              awayTeamId={match.awayTeamId}
+              homeScore={match.homeScore}
+              awayScore={match.awayScore}
+              homePenalties={match.homePenalties}
+              awayPenalties={match.awayPenalties}
+              status={match.status}
+              events={events}
+              homePlayers={home?.players ?? []}
+              awayPlayers={away?.players ?? []}
+            />
           ) : (
             <>
+              {/* Delegado del partido (4to árbitro) */}
+              <DelegatePicker matchId={match.id} />
+
               {/* MVP */}
               <Section title="MVP del partido" icon={Award} iconColor="text-yellow-500">
                 <MvpPicker

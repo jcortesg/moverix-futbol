@@ -38,6 +38,8 @@ export type CreateMatchDto = {
 }
 
 export type UpdateMatchDto = Partial<Omit<CreateMatchDto, 'matchdayId'>> & {
+  /** Mover el partido a otra jornada. Conserva sus eventos. */
+  matchdayId?: string
   status?: MatchStatus
   homeScore?: number
   awayScore?: number

@@ -67,6 +67,7 @@ export type PublicEditionData = {
     registrationStatus: string
   }>
   teamsCount: number
+  teamsHidden?: boolean
   venues: Array<{
     id: string
     name: string
@@ -170,10 +171,16 @@ export type RosterPlayer = {
   firstName: string | null
   lastName: string | null
   docNumber: string | null
+  birthDate: string | null
+  employer: string | null
+  healthProvider: string | null
   phone: string | null
   email: string | null
   position: string | null
   jerseyNumber: number | null
+  emergencyContactName: string | null
+  emergencyContactPhone: string | null
+  docFileUrl: string | null
   addedAt: string
 }
 
@@ -189,14 +196,28 @@ export type AddPlayerDto = {
   firstName?: string
   lastName?: string
   docNumber?: string
+  birthDate?: string
+  employer?: string
+  healthProvider?: string
   phone?: string
   email?: string
   position?: string
   jerseyNumber?: number
+  emergencyContactName?: string
+  emergencyContactPhone?: string
 }
 
 export async function addDirectorPlayer(dto: AddPlayerDto): Promise<RosterPlayer> {
   const headers = await getAuthHeader()
   const { data } = await publicApi.post('/public/teams/roster/add-player', dto, { headers })
+  return data
+}
+
+/** Sube la cédula (imagen o fotocopia) de un jugador — solo director del equipo. */
+export async function uploadDirectorPlayerDocument(playerId: string, file: File): Promise<RosterPlayer> {
+  const headers = await getAuthHeader()
+  const form = new FormData()
+  form.append('file', file)
+  const { data } = await publicApi.post(`/public/teams/roster/${playerId}/document`, form, { headers })
   return data
 }

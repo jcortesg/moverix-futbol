@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import {
-  ChevronLeft, Loader2, AlertCircle, Shield, Upload, Trophy,
+  ChevronLeft, Loader2, AlertCircle, Shield, Upload,
   Users, Calendar, DollarSign, Ban, BarChart2,
   CheckCircle2, XCircle, UserMinus, DollarSign as DollarIcon,
   Pencil, Save, X,
@@ -21,21 +21,23 @@ import { resizeImage } from '@/lib/image'
 import { getGroupsByEdition, type GroupFromApi } from '@/lib/groups'
 import { getEdition, type EditionFromApi } from '@/lib/leagues'
 import { RosterTab } from './RosterTab'
+import { TeamMatchesTab, TeamPaymentsTab, TeamFinesTab, TeamStatsTab } from './TeamTabs'
 import { inputCls } from '@/components/ui/form'
 
 // ─── Tab metadata ────────────────────────────────────────────────────────────
 
 const TABS = [
   { key: 'roster',   label: 'Plantilla',     icon: Users,      enabled: true },
-  { key: 'matches',  label: 'Partidos',      icon: Calendar,   enabled: false },
-  { key: 'payments', label: 'Pagos',         icon: DollarSign, enabled: false },
-  { key: 'fines',    label: 'Sanciones',     icon: Ban,        enabled: false },
-  { key: 'stats',    label: 'Estadísticas',  icon: BarChart2,  enabled: false },
+  { key: 'matches',  label: 'Partidos',      icon: Calendar,   enabled: true },
+  { key: 'payments', label: 'Pagos',         icon: DollarSign, enabled: true },
+  { key: 'fines',    label: 'Sanciones',     icon: Ban,        enabled: true },
+  { key: 'stats',    label: 'Estadísticas',  icon: BarChart2,  enabled: true },
 ] as const
 
 type TabKey = typeof TABS[number]['key']
 
 const STATUS_STYLE: Record<RegistrationStatus, { label: string; bg: string; text: string; dot: string }> = {
+  draft:     { label: 'Borrador',   bg: 'bg-slate-50 border-slate-200',  text: 'text-slate-600',  dot: 'bg-slate-400' },
   pending:   { label: 'Pendiente',  bg: 'bg-amber-50 border-amber-200',  text: 'text-amber-700',  dot: 'bg-amber-500' },
   approved:  { label: 'Aprobado',   bg: 'bg-green-50 border-green-200',  text: 'text-green-700',  dot: 'bg-green-500' },
   rejected:  { label: 'Rechazado',  bg: 'bg-red-50 border-red-200',      text: 'text-red-700',    dot: 'bg-red-500' },
@@ -125,7 +127,12 @@ export function TeamDetailView({ editionId, registrationId }: { editionId: strin
               {status.label}
             </span>
             <div className="flex items-center gap-1">
-              {reg.status !== 'approved' && (
+              {reg.status === 'draft' && (
+                <span className="text-[10px] text-slate-400 italic mr-1" title="El equipo aún no ha enviado su inscripción">
+                  Esperando plantilla del equipo
+                </span>
+              )}
+              {reg.status !== 'approved' && reg.status !== 'draft' && (
                 <button
                   onClick={() => patchRegistration({ status: 'approved' })}
                   className="p-1 rounded-md text-green-600 hover:bg-green-50 transition-colors"
@@ -134,7 +141,7 @@ export function TeamDetailView({ editionId, registrationId }: { editionId: strin
                   <CheckCircle2 size={13} />
                 </button>
               )}
-              {reg.status !== 'rejected' && (
+              {reg.status !== 'rejected' && reg.status !== 'draft' && (
                 <button
                   onClick={() => patchRegistration({ status: 'rejected' })}
                   className="p-1 rounded-md text-red-500 hover:bg-red-50 transition-colors"
@@ -143,7 +150,7 @@ export function TeamDetailView({ editionId, registrationId }: { editionId: strin
                   <XCircle size={13} />
                 </button>
               )}
-              {reg.status !== 'withdrawn' && reg.status !== 'rejected' && (
+              {reg.status !== 'withdrawn' && reg.status !== 'rejected' && reg.status !== 'draft' && (
                 <button
                   onClick={() => patchRegistration({ status: 'withdrawn' })}
                   className="p-1 rounded-md text-slate-500 hover:bg-slate-100 transition-colors"
@@ -243,14 +250,33 @@ export function TeamDetailView({ editionId, registrationId }: { editionId: strin
       </div>
 
       {/* Tab content */}
-      {tab === 'roster' && <RosterTab registrationId={reg.id} editionId={editionId} teamId={reg.team.id} />}
-      {tab !== 'roster' && (
-        <div className="bg-white rounded-2xl border-2 border-dashed border-slate-200 py-16 flex flex-col items-center justify-center gap-3">
-          <Trophy size={26} className="text-slate-300" />
-          <p className="text-sm font-semibold text-slate-500">Módulo disponible próximamente</p>
-          <p className="text-xs text-slate-400">Esta sección se activará cuando implementemos el módulo correspondiente.</p>
-        </div>
+      {tab === 'roster' && (
+        <RosterTab
+          registrationId={reg.id}
+          editionId={editionId}
+          teamId={reg.team.id}
+          editionName={edition?.name}
+          teamName={reg.team.name}
+          teamLogoUrl={reg.team.logoUrl}
+          groupName={groups.find((g) => g.id === reg.groupId)?.name ?? null}
+          city={reg.team.city}
+          requiredPlayerFields={edition?.requiredPlayerFields ?? []}
+        />
       )}
+      {tab === 'matches' && <TeamMatchesTab editionId={editionId} teamId={reg.team.id} />}
+      {tab === 'payments' && (
+        <TeamPaymentsTab
+          editionId={editionId}
+          teamId={reg.team.id}
+          registrationId={reg.id}
+          currency={edition.currency}
+          fee={edition.registrationFee}
+        />
+      )}
+      {tab === 'fines' && (
+        <TeamFinesTab editionId={editionId} teamId={reg.team.id} registrationId={reg.id} currency={edition.currency} />
+      )}
+      {tab === 'stats' && <TeamStatsTab editionId={editionId} teamId={reg.team.id} />}
     </div>
   )
 }

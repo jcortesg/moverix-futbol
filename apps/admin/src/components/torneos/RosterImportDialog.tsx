@@ -172,12 +172,15 @@ export function RosterImportDialog({
         return
       }
 
-      // Build lookup of existing emails/docs to detect duplicates against DB
+      // Build lookup of existing emails/docs to detect duplicates against DB.
+      // Los dados de baja NO cuentan: si el organizador eliminó a alguien y lo
+      // vuelve a subir, el import debe aceptarlo (la API revive su fila).
+      const activeRoster = existingRoster.filter((p) => !p.removedAt)
       const existingEmails = new Set(
-        existingRoster.map((p) => p.email?.toLowerCase().trim()).filter(Boolean) as string[],
+        activeRoster.map((p) => p.email?.toLowerCase().trim()).filter(Boolean) as string[],
       )
       const existingDocs = new Set(
-        existingRoster.map((p) => p.docNumber?.trim()).filter(Boolean) as string[],
+        activeRoster.map((p) => p.docNumber?.trim()).filter(Boolean) as string[],
       )
 
       // Track duplicates within the file itself

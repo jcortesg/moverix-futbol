@@ -77,6 +77,17 @@ export type PhaseMultiCup = {
   cups: CupConfig[]
 }
 
+export type PhaseConfig = PhaseGroups | PhaseRoundRobin | PhaseKnockout | PhaseMultiCup
+
+export type PhaseKind = PhaseConfig['kind']
+
+export const PHASE_KIND_LABEL: Record<PhaseKind, string> = {
+  groups: 'Grupos',
+  round_robin: 'Todos vs Todos',
+  knockout: 'Eliminatoria',
+  multi_cup: 'Multi-Copa',
+}
+
 export type FormatConfig = {
   type?: FormatType
   minutesPerHalf?: number
@@ -84,8 +95,35 @@ export type FormatConfig = {
   hasPenalties?: boolean
   registrationOpen?: string
   registrationClose?: string
-  phase1?: PhaseGroups | PhaseRoundRobin
-  phase2?: PhaseKnockout | PhaseMultiCup
+  phases: PhaseConfig[]
+}
+
+/**
+ * Normalize legacy formatConfig (phase1/phase2) into phases array.
+ * Safe to call on already-normalized data.
+ */
+export function normalizeFormatConfig(raw: Record<string, unknown> | FormatConfig | undefined): FormatConfig {
+  if (!raw) return { phases: [] }
+  // Already normalized
+  if (Array.isArray((raw as FormatConfig).phases)) {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { phase1, phase2, ...rest } = raw as FormatConfig & { phase1?: unknown; phase2?: unknown }
+    return rest as FormatConfig
+  }
+  // Legacy: convert phase1/phase2 → phases[]
+  const { phase1, phase2, ...rest } = raw as Record<string, unknown>
+  const phases: PhaseConfig[] = []
+  if (phase1 && typeof phase1 === 'object' && 'kind' in phase1) phases.push(phase1 as PhaseConfig)
+  if (phase2 && typeof phase2 === 'object' && 'kind' in phase2) phases.push(phase2 as PhaseConfig)
+  return { ...rest, phases } as FormatConfig
+}
+
+/** Find the first phase of a given kind */
+export function findPhase<K extends PhaseKind>(
+  phases: PhaseConfig[],
+  kind: K,
+): Extract<PhaseConfig, { kind: K }> | undefined {
+  return phases.find((p) => p.kind === kind) as Extract<PhaseConfig, { kind: K }> | undefined
 }
 
 // ─── Tiebreaker rules ─────────────────────────────────────────────────────────
@@ -136,6 +174,9 @@ export type EditionFromApi = {
   formatConfig: FormatConfig
   tiebreakerRules: TiebreakerRules | null
   maxTeams: number
+  minPlayersPerTeam: number | null
+  maxPlayersPerTeam: number | null
+  requiredPlayerFields: string[]
   registrationFee: number
   prizePool: number
   currency: string
@@ -144,7 +185,14 @@ export type EditionFromApi = {
   rulesUrl: string | null
   slug: string
   isPublished: boolean
+  registrationsOpen: boolean
+  /** Cierre GENERAL de nóminas (manda sobre el candado de cada equipo). */
+  rostersLocked: boolean
+  /** Clave pública del widget embebible; null = desactivado. */
+  embedKey: string | null
   publicDescription: string | null
+  /** Multas y sanciones de este torneo; null = usa los valores por defecto. */
+  fineDefaults: Record<string, unknown> | null
   startDate: string | null
   endDate: string | null
   createdAt: string
@@ -234,9 +282,30 @@ export async function createEdition(dto: CreateEditionDto): Promise<EditionFromA
   return data
 }
 
+// Campos del jugador que el organizador puede marcar como requeridos en la
+// inscripción. Debe coincidir con ROSTER_PLAYER_FIELDS del backend.
+export const ROSTER_PLAYER_FIELDS: { key: string; label: string }[] = [
+  { key: 'firstName', label: 'Nombre' },
+  { key: 'lastName', label: 'Apellido' },
+  { key: 'docNumber', label: 'Documento' },
+  { key: 'birthDate', label: 'Fecha de nacimiento' },
+  { key: 'phone', label: 'Teléfono' },
+  { key: 'email', label: 'Email' },
+  { key: 'employer', label: 'Empresa' },
+  { key: 'healthProvider', label: 'EPS' },
+  { key: 'jerseyNumber', label: 'Dorsal' },
+  { key: 'position', label: 'Posición' },
+  { key: 'photoFileUrl', label: 'Foto' },
+  { key: 'docFileUrl', label: 'Documento (archivo)' },
+  { key: 'emergencyContactName', label: 'Contacto de emergencia (nombre)' },
+  { key: 'emergencyContactPhone', label: 'Contacto de emergencia (teléfono)' },
+]
+
+export const DEFAULT_REQUIRED_PLAYER_FIELDS = ['firstName', 'lastName', 'docNumber', 'birthDate']
+
 export async function updateEdition(
   id: string,
-  dto: Partial<Pick<EditionFromApi, 'name' | 'season' | 'status' | 'maxTeams' | 'registrationFee' | 'prizePool' | 'currency' | 'startDate' | 'endDate' | 'rulesUrl' | 'isPublished' | 'publicDescription'>>
+  dto: Partial<Pick<EditionFromApi, 'name' | 'season' | 'status' | 'maxTeams' | 'minPlayersPerTeam' | 'maxPlayersPerTeam' | 'requiredPlayerFields' | 'registrationFee' | 'prizePool' | 'currency' | 'startDate' | 'endDate' | 'rulesUrl' | 'isPublished' | 'registrationsOpen' | 'rostersLocked' | 'publicDescription' | 'fineDefaults'>>
     & { formatConfig?: FormatConfig; tiebreakerRules?: TiebreakerRules },
 ): Promise<EditionFromApi> {
   const { data } = await api.patch<EditionFromApi>(`/editions/${id}`, dto)
@@ -270,4 +339,15 @@ export async function uploadOrganizationLogo(id: string, file: File): Promise<Or
   form.append('file', file)
   const { data } = await api.post<OrganizationFromApi>(`/organizations/${id}/logo`, form)
   return data
+}
+
+/** Genera (o regenera) la clave del widget. Regenerarla revoca la anterior. */
+export async function generateEmbedKey(editionId: string): Promise<{ embedKey: string }> {
+  const { data } = await api.post<{ embedKey: string }>(`/editions/${editionId}/embed-key`)
+  return data
+}
+
+/** Desactiva el widget: la clave deja de responder. */
+export async function revokeEmbedKey(editionId: string): Promise<void> {
+  await api.delete(`/editions/${editionId}/embed-key`)
 }

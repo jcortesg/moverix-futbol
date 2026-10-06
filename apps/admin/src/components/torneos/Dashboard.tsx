@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import {
   Trophy, Users, CreditCard, Calendar, AlertCircle,
@@ -54,6 +54,18 @@ export function Dashboard() {
       setLoading(false)
     }
   }, [ready, activeEdition, load])
+
+  // Mapa teamId → nombre/logo (de la tabla de posiciones). Debe declararse antes de
+  // cualquier return temprano para no violar las reglas de hooks (React error #310).
+  const teamMap = useMemo(() => {
+    const m = new Map<string, { name: string; shortName: string | null; logoUrl: string | null }>()
+    for (const g of data?.standings ?? []) {
+      for (const row of g.rows) {
+        m.set(row.teamId, { name: row.teamName, shortName: row.teamShortName, logoUrl: row.teamLogoUrl })
+      }
+    }
+    return m
+  }, [data?.standings])
 
   if (!ready || loading) {
     return (
@@ -154,7 +166,7 @@ export function Dashboard() {
             items={todayMatches}
             actionHref={`/torneos/edicion/${activeEdition.id}/gestionar/partidos`}
             actionLabel="Ver fixture"
-            renderItem={(match) => <MatchRow key={match.id} match={match} />}
+            renderItem={(match) => <MatchRow key={match.id} match={match} teamMap={teamMap} />}
           />
 
           {/* Pending results */}
@@ -166,7 +178,7 @@ export function Dashboard() {
                 items={pendingResults.slice(0, 5)}
                 actionHref={`/torneos/edicion/${activeEdition.id}/gestionar/partidos`}
                 actionLabel="Cargar resultados"
-                renderItem={(match) => <MatchRow key={match.id} match={match} />}
+                renderItem={(match) => <MatchRow key={match.id} match={match} teamMap={teamMap} />}
               />
             </div>
           )}
@@ -248,10 +260,21 @@ function KpiCard({
   )
 }
 
-function MatchRow({ match }: { match: MatchFromApi }) {
+function MatchRow({
+  match,
+  teamMap,
+}: {
+  match: MatchFromApi
+  teamMap: Map<string, { name: string; shortName: string | null; logoUrl: string | null }>
+}) {
   const time = match.scheduledAt
     ? new Date(match.scheduledAt).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })
     : '--:--'
+
+  const home = match.homeTeamId ? teamMap.get(match.homeTeamId) : null
+  const away = match.awayTeamId ? teamMap.get(match.awayTeamId) : null
+  const homeName = home?.name ?? 'Por definir'
+  const awayName = away?.name ?? 'Por definir'
 
   const statusColor = {
     scheduled: 'bg-blue-100 text-blue-700',
@@ -266,7 +289,10 @@ function MatchRow({ match }: { match: MatchFromApi }) {
     <div className="flex items-center gap-3 py-2.5 border-b border-slate-50 last:border-0">
       <span className="text-xs font-mono text-slate-400 w-12">{time}</span>
       <div className="flex-1 min-w-0">
-        <span className="text-xs font-medium text-slate-700 truncate block">
+        <span className="text-sm font-medium text-slate-800 truncate block">
+          {homeName} <span className="text-slate-400">vs</span> {awayName}
+        </span>
+        <span className="text-[11px] text-slate-400 truncate block">
           {match.round ?? `J${match.matchdayNumber ?? '?'}`}
         </span>
       </div>

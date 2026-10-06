@@ -1,14 +1,18 @@
 'use client'
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import {
-  AlertCircle, BarChart2, Calendar, Crown, Loader2, Mail, Pencil, Phone,
-  Save, Shield, User, X,
+  AlertCircle, BarChart2, Calendar, Crown, Download, FileText, Loader2, Mail,
+  Pencil, Phone, Save, Shield, Trash2, Upload, User, X,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import {
   PLAYER_POSITIONS,
   PLAYER_POSITION_LABEL,
+  uploadPlayerFile,
+  fetchPlayerFileUrl,
+  removePlayerFile,
+  type PlayerFileKind,
   type PlayerPosition,
   type RegistrationPlayerFromApi,
 } from '@/lib/registration-players'
@@ -26,12 +30,15 @@ export type PlayerFormValues = {
   jerseyNumber: string
   position: PlayerPosition | ''
   isCaptain: boolean
+  emergencyContactName: string
+  emergencyContactPhone: string
 }
 
 export const EMPTY_PLAYER_FORM: PlayerFormValues = {
   firstName: '', lastName: '', docNumber: '', birthDate: '',
   employer: '', phone: '', email: '', healthProvider: '',
   jerseyNumber: '', position: '', isCaptain: false,
+  emergencyContactName: '', emergencyContactPhone: '',
 }
 
 export function fromPlayer(p: RegistrationPlayerFromApi): PlayerFormValues {
@@ -47,6 +54,8 @@ export function fromPlayer(p: RegistrationPlayerFromApi): PlayerFormValues {
     jerseyNumber: p.jerseyNumber?.toString() ?? '',
     position: p.position ?? '',
     isCaptain: p.isCaptain,
+    emergencyContactName: p.emergencyContactName ?? '',
+    emergencyContactPhone: p.emergencyContactPhone ?? '',
   }
 }
 
@@ -293,6 +302,152 @@ function ProfileView({ player }: { player: RegistrationPlayerFromApi }) {
         <InfoRow label="Empresa" value={player.employer} />
         <InfoRow label="EPS" value={player.healthProvider} />
       </Section>
+
+      <Section title="Contacto de emergencia">
+        <InfoRow label="Nombre" value={player.emergencyContactName} />
+        <InfoRow
+          label="Teléfono"
+          value={player.emergencyContactPhone}
+          icon={Phone}
+          href={player.emergencyContactPhone ? `tel:${player.emergencyContactPhone}` : undefined}
+          mono
+        />
+      </Section>
+
+      <FileSection
+        playerId={player.id}
+        kind="document"
+        title="Documento de identidad"
+        accept="application/pdf,image/jpeg,image/png,image/webp,image/heic"
+        uploadLabel="Subir documento (PDF o imagen)"
+        attachedLabel="Documento adjunto"
+        initialHasFile={!!player.docFileUrl}
+      />
+
+      <FileSection
+        playerId={player.id}
+        kind="photo"
+        title="Foto del jugador"
+        accept="image/jpeg,image/png,image/webp,image/heic"
+        uploadLabel="Subir foto"
+        attachedLabel="Foto adjunta"
+        initialHasFile={!!player.photoFileUrl}
+      />
+    </div>
+  )
+}
+
+// ─── Archivo del jugador (cédula / foto) ───────────────────────────────────
+
+function FileSection({
+  playerId, kind, title, accept, uploadLabel, attachedLabel, initialHasFile,
+}: {
+  playerId: string
+  kind: PlayerFileKind
+  title: string
+  accept: string
+  uploadLabel: string
+  attachedLabel: string
+  initialHasFile: boolean
+}) {
+  const [hasFile, setHasFile] = useState(initialHasFile)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setBusy(true)
+    setError(null)
+    try {
+      await uploadPlayerFile(playerId, kind, file)
+      setHasFile(true)
+    } catch (err) {
+      setError(extractError(err) ?? 'No se pudo subir el archivo.')
+    } finally {
+      setBusy(false)
+      if (inputRef.current) inputRef.current.value = ''
+    }
+  }
+
+  async function handleView() {
+    setBusy(true)
+    setError(null)
+    try {
+      const url = await fetchPlayerFileUrl(playerId, kind)
+      window.open(url, '_blank', 'noopener,noreferrer')
+      setTimeout(() => URL.revokeObjectURL(url), 60_000)
+    } catch (err) {
+      setError(extractError(err) ?? 'No se pudo abrir el archivo.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleRemove() {
+    if (!confirm(`¿Eliminar ${title.toLowerCase()} de este jugador?`)) return
+    setBusy(true)
+    setError(null)
+    try {
+      await removePlayerFile(playerId, kind)
+      setHasFile(false)
+    } catch (err) {
+      setError(extractError(err) ?? 'No se pudo eliminar el archivo.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div>
+      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2.5">{title}</p>
+      <input ref={inputRef} type="file" accept={accept} className="hidden" onChange={handleUpload} />
+      <div className="rounded-xl border border-slate-200 bg-white p-3">
+        {hasFile ? (
+          <div className="flex items-center justify-between gap-3">
+            <span className="inline-flex items-center gap-2 text-sm text-slate-700 min-w-0">
+              <FileText size={15} className="text-green-600 flex-shrink-0" />
+              <span className="truncate">{attachedLabel}</span>
+            </span>
+            <div className="flex items-center gap-1 flex-shrink-0">
+              <button
+                type="button" onClick={handleView} disabled={busy}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-100 transition-colors disabled:opacity-50"
+              >
+                {busy ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />} Ver
+              </button>
+              <button
+                type="button" onClick={() => inputRef.current?.click()} disabled={busy}
+                className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition-colors disabled:opacity-50"
+                title="Reemplazar"
+              >
+                <Upload size={13} />
+              </button>
+              <button
+                type="button" onClick={handleRemove} disabled={busy}
+                className="p-1.5 rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-600 transition-colors disabled:opacity-50"
+                title="Eliminar"
+              >
+                <Trash2 size={13} />
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button
+            type="button" onClick={() => inputRef.current?.click()} disabled={busy}
+            className="flex items-center justify-center gap-2 w-full py-3 rounded-lg border-2 border-dashed border-slate-200 text-sm font-semibold text-slate-500 hover:border-green-300 hover:text-green-700 transition-colors disabled:opacity-50"
+          >
+            {busy ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
+            {uploadLabel}
+          </button>
+        )}
+        {error && (
+          <div className="flex items-center gap-2 mt-2 text-xs text-red-600">
+            <AlertCircle size={12} /> {error}
+          </div>
+        )}
+      </div>
     </div>
   )
 }
@@ -416,6 +571,19 @@ function ProfileForm({
           <Field label="EPS">
             <input className={inputCls} value={values.healthProvider}
               onChange={(e) => onPatch({ healthProvider: e.target.value })} placeholder="Sanitas" />
+          </Field>
+        </div>
+      </FormSection>
+
+      <FormSection title="Contacto de emergencia">
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Nombre">
+            <input className={inputCls} value={values.emergencyContactName}
+              onChange={(e) => onPatch({ emergencyContactName: e.target.value })} placeholder="María Pérez" />
+          </Field>
+          <Field label="Teléfono">
+            <input type="tel" className={inputCls} value={values.emergencyContactPhone}
+              onChange={(e) => onPatch({ emergencyContactPhone: e.target.value })} placeholder="3124035940" />
           </Field>
         </div>
       </FormSection>

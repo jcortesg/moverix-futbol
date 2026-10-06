@@ -1,9 +1,11 @@
 import type {
   FormatType,
+  FormatConfig,
+  PhaseConfig,
+  PhaseKind,
   PhaseGroups,
   CupConfig,
   CupDistribution,
-  FormatConfig,
 } from './leagues'
 
 // ─── Math helpers ────────────────────────────────────────────────────────────
@@ -20,7 +22,6 @@ export function computeGroupDefaults(totalTeams: number, groupCount: number) {
   if (groupCount <= 0) return { teamsPerGroup: 0, remainder: 0, distribution: '' }
   const base = Math.floor(totalTeams / groupCount)
   const remainder = totalTeams % groupCount
-  // remainder groups get base+1, the rest get base
   const distribution = remainder > 0
     ? `${remainder} grupo${remainder > 1 ? 's' : ''} de ${base + 1} y ${groupCount - remainder} de ${base}`
     : `${groupCount} grupos de ${base}`
@@ -34,18 +35,19 @@ export function computeGroupsFromTeamsPerGroup(totalTeams: number, teamsPerGroup
   return { groupCount, remainder }
 }
 
-// ─── Derive FormatType from phase kinds ──────────────────────────────────────
+// ─── Derive FormatType from phases array ─────────────────────────────────────
 
-type PhaseKind = 'groups' | 'round_robin' | null
-type Phase2Kind = 'knockout' | 'multi_cup' | null
-
-export function deriveFormatType(phase1Kind: PhaseKind, phase2Kind: Phase2Kind): FormatType | undefined {
-  if (phase1Kind === 'groups' && phase2Kind === 'knockout') return 'groups_knockout'
-  if (phase1Kind === 'groups' && phase2Kind === 'multi_cup') return 'groups_multi_cup'
-  if (phase1Kind === 'round_robin' && phase2Kind === 'knockout') return 'round_robin_playoffs'
-  if (phase1Kind === null && phase2Kind === 'knockout') return 'knockout_only'
-  if (phase1Kind === 'round_robin' && phase2Kind === null) return 'round_robin_only'
-  return undefined
+export function deriveFormatType(phases: PhaseConfig[]): FormatType | undefined {
+  const kinds = phases.map((p) => p.kind)
+  const key = kinds.join(',')
+  const map: Record<string, FormatType> = {
+    'groups,knockout': 'groups_knockout',
+    'groups,multi_cup': 'groups_multi_cup',
+    'round_robin,knockout': 'round_robin_playoffs',
+    'knockout': 'knockout_only',
+    'round_robin': 'round_robin_only',
+  }
+  return map[key]
 }
 
 // ─── Smart cup defaults ──────────────────────────────────────────────────────
@@ -92,8 +94,7 @@ export type FormatTemplate = {
   label: string
   icon: string
   desc: string
-  phase1Kind: PhaseKind
-  phase2Kind: Phase2Kind
+  phaseKinds: PhaseKind[]
 }
 
 export const FORMAT_TEMPLATES: FormatTemplate[] = [
@@ -102,115 +103,88 @@ export const FORMAT_TEMPLATES: FormatTemplate[] = [
     label: 'Grupos + Eliminatoria',
     icon: '⚽',
     desc: 'Fase de grupos donde clasifican los mejores, luego eliminación directa.',
-    phase1Kind: 'groups',
-    phase2Kind: 'knockout',
+    phaseKinds: ['groups', 'knockout'],
   },
   {
     id: 'groups_multi_cup',
     label: 'Grupos + Multi-Copa',
     icon: '🏆',
     desc: 'Grupos → múltiples copas (A, B, C) según clasificación. Más partidos para todos.',
-    phase1Kind: 'groups',
-    phase2Kind: 'multi_cup',
+    phaseKinds: ['groups', 'multi_cup'],
   },
   {
     id: 'round_robin_playoffs',
     label: 'Todos vs Todos + Playoffs',
     icon: '🔄',
     desc: 'Todos los equipos se enfrentan entre sí. Los mejores avanzan a playoffs.',
-    phase1Kind: 'round_robin',
-    phase2Kind: 'knockout',
+    phaseKinds: ['round_robin', 'knockout'],
   },
   {
     id: 'knockout_only',
     label: 'Solo Eliminatoria',
     icon: '⚡',
     desc: 'Cuadro de eliminación directa. Ideal para torneos cortos o copas.',
-    phase1Kind: null,
-    phase2Kind: 'knockout',
+    phaseKinds: ['knockout'],
   },
   {
     id: 'round_robin_only',
     label: 'Solo Liga',
     icon: '📋',
     desc: 'Todos contra todos. El que más puntos acumule gana.',
-    phase1Kind: 'round_robin',
-    phase2Kind: null,
+    phaseKinds: ['round_robin'],
   },
 ]
 
 /**
- * Build a smart prefill for phase1 and phase2 based on a template and maxTeams.
+ * Build a default phase config for a given kind.
+ * `precedingPhases` lets knockout/multi_cup compute qualifiers from earlier groups.
  */
-export function buildPrefill(
-  template: FormatTemplate,
+export function buildPhaseDefault(
+  kind: PhaseKind,
   maxTeams: number,
-): Pick<FormatConfig, 'type' | 'phase1' | 'phase2'> {
+  precedingPhases: PhaseConfig[] = [],
+): PhaseConfig {
   const teams = maxTeams || 16
 
-  let phase1: FormatConfig['phase1']
-  if (template.phase1Kind === 'groups') {
-    // Smart group count: aim for 4 per group
+  if (kind === 'groups') {
     const idealGroups = Math.max(2, Math.round(teams / 4))
     const { teamsPerGroup } = computeGroupDefaults(teams, idealGroups)
-    const qualifiersPerGroup = template.phase2Kind === 'multi_cup' ? 0 : Math.min(2, teamsPerGroup)
-    phase1 = { kind: 'groups', groupCount: idealGroups, teamsPerGroup, qualifiersPerGroup, doubleLeg: false }
-  } else if (template.phase1Kind === 'round_robin') {
-    phase1 = { kind: 'round_robin', doubleLeg: true }
-  }
-
-  let phase2: FormatConfig['phase2']
-  if (template.phase2Kind === 'knockout') {
-    const qualifiers = phase1?.kind === 'groups'
-      ? (phase1 as PhaseGroups).groupCount * (phase1 as PhaseGroups).qualifiersPerGroup
-      : phase1?.kind === 'round_robin'
-        ? Math.min(8, teams)
-        : teams
-    phase2 = {
-      kind: 'knockout',
-      bracketSize: nearestPowerOf2(Math.max(2, qualifiers)),
-      hasThirdPlace: false,
-      hasRepechage: false,
-    }
-  } else if (template.phase2Kind === 'multi_cup') {
-    const gc = phase1?.kind === 'groups' ? (phase1 as PhaseGroups).groupCount : 0
-    const tpg = phase1?.kind === 'groups' ? (phase1 as PhaseGroups).teamsPerGroup : 0
-    phase2 = {
-      kind: 'multi_cup',
-      distribution: 'group_position' as CupDistribution,
-      cups: buildSmartCupDefaults(gc, tpg, 'group_position'),
-    }
-  }
-
-  return { type: template.id, phase1, phase2 }
-}
-
-/**
- * Build default phase config when user selects a phase kind from the dropdown.
- */
-export function buildPhase1Default(kind: PhaseKind, maxTeams: number): FormatConfig['phase1'] {
-  if (kind === 'groups') {
-    const idealGroups = Math.max(2, Math.round((maxTeams || 16) / 4))
-    const { teamsPerGroup } = computeGroupDefaults(maxTeams || 16, idealGroups)
     return { kind: 'groups', groupCount: idealGroups, teamsPerGroup, qualifiersPerGroup: Math.min(2, teamsPerGroup), doubleLeg: false }
   }
   if (kind === 'round_robin') {
     return { kind: 'round_robin', doubleLeg: true }
   }
-  return undefined
-}
-
-export function buildPhase2Default(kind: Phase2Kind, phase1: FormatConfig['phase1'], maxTeams: number): FormatConfig['phase2'] {
   if (kind === 'knockout') {
-    const qualifiers = phase1?.kind === 'groups'
-      ? (phase1 as PhaseGroups).groupCount * (phase1 as PhaseGroups).qualifiersPerGroup
-      : Math.min(8, maxTeams || 16)
+    const groupsPhase = precedingPhases.findLast((p) => p.kind === 'groups') as PhaseGroups | undefined
+    const rrPhase = precedingPhases.findLast((p) => p.kind === 'round_robin')
+    const qualifiers = groupsPhase
+      ? groupsPhase.groupCount * groupsPhase.qualifiersPerGroup
+      : rrPhase
+        ? Math.min(8, teams)
+        : teams
     return { kind: 'knockout', bracketSize: nearestPowerOf2(Math.max(2, qualifiers)), hasThirdPlace: false, hasRepechage: false }
   }
-  if (kind === 'multi_cup') {
-    const gc = phase1?.kind === 'groups' ? (phase1 as PhaseGroups).groupCount : 0
-    const tpg = phase1?.kind === 'groups' ? (phase1 as PhaseGroups).teamsPerGroup : 0
-    return { kind: 'multi_cup', distribution: 'group_position' as CupDistribution, cups: buildSmartCupDefaults(gc, tpg, 'group_position') }
+  // multi_cup
+  const groupsPhase = precedingPhases.findLast((p) => p.kind === 'groups') as PhaseGroups | undefined
+  const gc = groupsPhase?.groupCount ?? 0
+  const tpg = groupsPhase?.teamsPerGroup ?? 0
+  return {
+    kind: 'multi_cup',
+    distribution: 'group_position' as CupDistribution,
+    cups: buildSmartCupDefaults(gc, tpg, 'group_position'),
   }
-  return undefined
+}
+
+/**
+ * Build a smart prefill for phases based on a template and maxTeams.
+ */
+export function buildPrefill(
+  template: FormatTemplate,
+  maxTeams: number,
+): Pick<FormatConfig, 'type' | 'phases'> {
+  const phases: PhaseConfig[] = []
+  for (const kind of template.phaseKinds) {
+    phases.push(buildPhaseDefault(kind, maxTeams, phases))
+  }
+  return { type: template.id, phases }
 }

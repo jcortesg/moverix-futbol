@@ -1,11 +1,13 @@
 'use client'
 
 import { clsx } from 'clsx'
-import { ChevronDown, Plus, Trash2 } from 'lucide-react'
+import { ChevronDown, Plus, Trash2, ArrowUp, ArrowDown } from 'lucide-react'
 import type {
   EditionStatus,
   FormatConfig,
   FormatType,
+  PhaseConfig,
+  PhaseKind,
   PhaseGroups,
   PhaseRoundRobin,
   PhaseKnockout,
@@ -15,12 +17,11 @@ import type {
   CupFormat,
   CupGroupsConfig,
 } from '@/lib/leagues'
-import { CUP_DISTRIBUTION_LABEL } from '@/lib/leagues'
+import { CUP_DISTRIBUTION_LABEL, PHASE_KIND_LABEL } from '@/lib/leagues'
 import {
   FORMAT_TEMPLATES,
   buildPrefill,
-  buildPhase1Default,
-  buildPhase2Default,
+  buildPhaseDefault,
   deriveFormatType,
   computeGroupDefaults,
 } from '@/lib/format-defaults'
@@ -53,18 +54,22 @@ export function seasonCodeFromDate(dateStr: string): string {
   return `${year}-${half}`
 }
 
-// ─── Format sub-sections ──────────────────────────────────────────────────────
+const ALL_PHASE_KINDS: PhaseKind[] = ['groups', 'round_robin', 'knockout', 'multi_cup']
+
+// ─── Phase sub-forms ─────────────────────────────────────────────────────────
 
 export function PhaseGroupsForm({
   value,
   onChange,
   isMultiCup,
   maxTeams,
+  label = 'Grupos',
 }: {
   value: PhaseGroups
   onChange: (v: PhaseGroups) => void
   isMultiCup?: boolean
   maxTeams?: number
+  label?: string
 }) {
   function patch(p: Partial<PhaseGroups>) { onChange({ ...value, ...p }) }
 
@@ -92,8 +97,8 @@ export function PhaseGroupsForm({
   const remainder = maxTeams && value.groupCount ? maxTeams % value.groupCount : 0
 
   return (
-    <div className="p-4 bg-blue-50 rounded-xl border border-blue-200 space-y-4">
-      <p className="text-xs font-bold text-blue-700 uppercase tracking-wide">Fase 1 — Grupos</p>
+    <div className="space-y-4">
+      <p className="text-xs font-bold text-blue-700 uppercase tracking-wide">{label}</p>
       <div className={clsx('grid gap-3', isMultiCup ? 'grid-cols-2' : 'grid-cols-3')}>
         <Field label="N° de grupos">
           <input type="number" min={1} className={inputCls} value={value.groupCount || ''} placeholder="4"
@@ -121,7 +126,7 @@ export function PhaseGroupsForm({
           <p>
             Total: <strong>{totalSlots} equipos</strong> en {value.groupCount} grupos de {value.teamsPerGroup}.
             {!isMultiCup && <> Clasifican <strong>{value.groupCount * (value.qualifiersPerGroup || 2)}</strong> a la siguiente fase.</>}
-            {isMultiCup && <> Todos clasifican a las copas de la fase 2.</>}
+            {isMultiCup && <> Todos clasifican a las copas de la siguiente fase.</>}
           </p>
           {maxTeams && remainder > 0 && (
             <p className="text-blue-500">
@@ -139,229 +144,18 @@ export function PhaseGroupsForm({
   )
 }
 
-// ─── Phase selector ──────────────────────────────────────────────────────────
-
-const PHASE1_OPTIONS = [
-  { value: 'groups' as const, label: 'Grupos' },
-  { value: 'round_robin' as const, label: 'Todos vs Todos' },
-]
-
-const PHASE2_OPTIONS = [
-  { value: 'knockout' as const, label: 'Eliminatoria' },
-  { value: 'multi_cup' as const, label: 'Multi-Copa' },
-]
-
-export function FormatSection({
-  formatConfig,
-  onChange,
-  maxTeams,
-}: {
-  formatConfig: FormatConfig
-  onChange: (fc: FormatConfig) => void
-  maxTeams: number
-}) {
-  const phase1Kind = formatConfig.phase1?.kind ?? null
-  const phase2Kind = (formatConfig.phase2 as PhaseKnockout | PhaseMultiCup | undefined)?.kind ?? null
-  const selectedTemplateId = formatConfig.type
-
-  function selectTemplate(templateId: FormatType) {
-    const template = FORMAT_TEMPLATES.find((t) => t.id === templateId)!
-    const prefill = buildPrefill(template, maxTeams)
-    onChange({ ...formatConfig, ...prefill })
-  }
-
-  function changePhase1(kind: 'groups' | 'round_robin' | '') {
-    const newPhase1Kind = kind || null
-    let newPhase2Kind = phase2Kind
-    // If phase2 is multi_cup but phase1 is not groups, clear phase2
-    if (newPhase1Kind !== 'groups' && newPhase2Kind === 'multi_cup') {
-      newPhase2Kind = null
-    }
-    const newType = deriveFormatType(newPhase1Kind as 'groups' | 'round_robin' | null, newPhase2Kind)
-    onChange({
-      ...formatConfig,
-      type: newType,
-      phase1: kind ? buildPhase1Default(kind, maxTeams) : undefined,
-      ...(newPhase2Kind !== phase2Kind ? { phase2: newPhase2Kind ? buildPhase2Default(newPhase2Kind, formatConfig.phase1, maxTeams) : undefined } : {}),
-    })
-  }
-
-  function changePhase2(kind: 'knockout' | 'multi_cup' | '') {
-    const newPhase2Kind = kind || null
-    let newPhase1Kind = phase1Kind
-    // If selecting multi_cup and no groups, force groups
-    if (kind === 'multi_cup' && newPhase1Kind !== 'groups') {
-      newPhase1Kind = 'groups'
-    }
-    const newType = deriveFormatType(newPhase1Kind as 'groups' | 'round_robin' | null, newPhase2Kind as 'knockout' | 'multi_cup' | null)
-    const needsPhase1Update = newPhase1Kind !== phase1Kind
-    const newPhase1 = needsPhase1Update ? buildPhase1Default(newPhase1Kind as 'groups' | 'round_robin' | null, maxTeams) : formatConfig.phase1
-    onChange({
-      ...formatConfig,
-      type: newType,
-      ...(needsPhase1Update ? { phase1: newPhase1 } : {}),
-      phase2: kind ? buildPhase2Default(kind, newPhase1 ?? formatConfig.phase1, maxTeams) : undefined,
-    })
-  }
-
-  function patchFormat(patch: Partial<FormatConfig>) {
-    onChange({ ...formatConfig, ...patch })
-  }
-
-  const isMultiCup = phase2Kind === 'multi_cup'
-  const hasPhases = phase1Kind || phase2Kind
-
-  return (
-    <div className="space-y-5">
-      {/* Templates */}
-      <div>
-        <p className="text-sm font-semibold text-slate-700 mb-3">Plantilla de formato</p>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          {FORMAT_TEMPLATES.map(({ id, label, icon, desc }) => (
-            <button
-              key={id}
-              type="button"
-              onClick={() => selectTemplate(id)}
-              className={clsx(
-                'flex flex-col items-start gap-1.5 px-4 py-3 rounded-xl border text-left transition-all',
-                selectedTemplateId === id
-                  ? 'border-indigo-400 bg-indigo-50 ring-2 ring-indigo-300 ring-offset-1'
-                  : 'border-slate-200 bg-white hover:border-indigo-200 hover:bg-indigo-50/40',
-              )}
-            >
-              <span className="flex items-center gap-2 text-sm font-bold text-slate-800">
-                <span>{icon}</span> {label}
-              </span>
-              <span className="text-xs text-slate-500 leading-relaxed">{desc}</span>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Phase selectors */}
-      <div className="grid grid-cols-2 gap-4">
-        <Field label="Fase 1">
-          <div className="relative">
-            <select
-              className={clsx(inputCls, 'appearance-none pr-8')}
-              value={phase1Kind ?? ''}
-              onChange={(e) => changePhase1(e.target.value as 'groups' | 'round_robin' | '')}
-            >
-              <option value="">Ninguna</option>
-              {PHASE1_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
-            <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
-          </div>
-        </Field>
-        <Field label="Fase 2">
-          <div className="relative">
-            <select
-              className={clsx(inputCls, 'appearance-none pr-8')}
-              value={phase2Kind ?? ''}
-              onChange={(e) => changePhase2(e.target.value as 'knockout' | 'multi_cup' | '')}
-            >
-              <option value="">Ninguna</option>
-              {PHASE2_OPTIONS.map((o) => {
-                const disabled = o.value === 'multi_cup' && phase1Kind !== 'groups'
-                return <option key={o.value} value={o.value} disabled={disabled}>{o.label}{disabled ? ' (requiere grupos)' : ''}</option>
-              })}
-            </select>
-            <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
-          </div>
-        </Field>
-      </div>
-
-      {/* Phase 1 form */}
-      {phase1Kind === 'groups' && (
-        <PhaseGroupsForm
-          value={(formatConfig.phase1 as PhaseGroups) ?? { kind: 'groups', groupCount: 4, teamsPerGroup: 4, qualifiersPerGroup: 2, doubleLeg: false }}
-          onChange={(p1) => patchFormat({ phase1: p1 })}
-          isMultiCup={isMultiCup}
-          maxTeams={maxTeams}
-        />
-      )}
-      {phase1Kind === 'round_robin' && (
-        <PhaseRoundRobinForm
-          value={(formatConfig.phase1 as PhaseRoundRobin) ?? { kind: 'round_robin', doubleLeg: true }}
-          onChange={(p1) => patchFormat({ phase1: p1 })}
-        />
-      )}
-
-      {/* Phase 2 form */}
-      {phase2Kind === 'knockout' && (
-        <PhaseKnockoutForm
-          value={(formatConfig.phase2 as PhaseKnockout) ?? { kind: 'knockout', bracketSize: 8, hasThirdPlace: false, hasRepechage: false }}
-          onChange={(p2) => patchFormat({ phase2: p2 })}
-          label={phase1Kind ? 'Fase 2 — Eliminatoria' : 'Cuadro eliminatorio'}
-        />
-      )}
-      {phase2Kind === 'multi_cup' && (
-        <PhaseMultiCupForm
-          value={(formatConfig.phase2 as PhaseMultiCup) ?? { kind: 'multi_cup', cups: [] }}
-          onChange={(p2) => patchFormat({ phase2: p2 })}
-          phase1={formatConfig.phase1 as PhaseGroups | null}
-        />
-      )}
-
-      {/* Match rules */}
-      {hasPhases && (
-        <div className="pt-2 border-t border-slate-100 space-y-3">
-          <p className="text-sm font-semibold text-slate-700">Reglas del partido</p>
-          <div className="grid grid-cols-2 gap-3">
-            <Toggle
-              checked={formatConfig.hasExtraTime ?? false}
-              onChange={(v) => patchFormat({ hasExtraTime: v })}
-              label="Tiempo extra"
-              description="Si el partido termina empatado."
-            />
-            <Toggle
-              checked={formatConfig.hasPenalties ?? false}
-              onChange={(v) => patchFormat({ hasPenalties: v })}
-              label="Penales"
-              description="Si persiste el empate."
-            />
-          </div>
-          <div className="flex items-end gap-4">
-            <div className="w-44">
-              <Field label="Minutos por tiempo">
-                <div className="relative">
-                  <input
-                    type="number" min={5} max={60}
-                    className={inputCls}
-                    value={formatConfig.minutesPerHalf ?? ''}
-                    onChange={(e) => patchFormat({ minutesPerHalf: parseInt(e.target.value) || undefined })}
-                    placeholder="25"
-                  />
-                  <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs text-slate-400 pointer-events-none">min</span>
-                </div>
-              </Field>
-            </div>
-            {formatConfig.minutesPerHalf ? (
-              <div className="flex items-center gap-2 mb-1 px-4 py-2.5 bg-indigo-50 border border-indigo-200 rounded-xl">
-                <span className="text-sm font-semibold text-indigo-700">{formatConfig.minutesPerHalf * 2} min totales</span>
-              </div>
-            ) : null}
-          </div>
-        </div>
-      )}
-
-      {!hasPhases && (
-        <p className="text-sm text-slate-400 text-center py-6">Selecciona una plantilla arriba o elige las fases en los selectores.</p>
-      )}
-    </div>
-  )
-}
-
 export function PhaseRoundRobinForm({
   value,
   onChange,
+  label = 'Todos contra todos',
 }: {
   value: PhaseRoundRobin
   onChange: (v: PhaseRoundRobin) => void
+  label?: string
 }) {
   return (
-    <div className="p-4 bg-blue-50 rounded-xl border border-blue-200 space-y-3">
-      <p className="text-xs font-bold text-blue-700 uppercase tracking-wide">Fase 1 — Todos contra todos</p>
+    <div className="space-y-3">
+      <p className="text-xs font-bold text-blue-700 uppercase tracking-wide">{label}</p>
       <Toggle
         checked={value.doubleLeg}
         onChange={(v) => onChange({ ...value, doubleLeg: v })}
@@ -375,7 +169,7 @@ export function PhaseRoundRobinForm({
 export function PhaseKnockoutForm({
   value,
   onChange,
-  label = 'Fase 2 — Eliminatoria',
+  label = 'Eliminatoria',
 }: {
   value: PhaseKnockout
   onChange: (v: PhaseKnockout) => void
@@ -384,7 +178,7 @@ export function PhaseKnockoutForm({
   function patch(p: Partial<PhaseKnockout>) { onChange({ ...value, ...p }) }
   const BRACKET_SIZES = [4, 8, 16, 32, 64]
   return (
-    <div className="p-4 bg-indigo-50 rounded-xl border border-indigo-200 space-y-4">
+    <div className="space-y-4">
       <p className="text-xs font-bold text-indigo-700 uppercase tracking-wide">{label}</p>
       <Field label="Equipos en el cuadro" hint="Potencia de 2. Los equipos clasificados ocupan las posiciones del bracket.">
         <div className="flex gap-2 flex-wrap">
@@ -423,7 +217,7 @@ export function PhaseKnockoutForm({
   )
 }
 
-// Cup logic functions (inlined to avoid type conflicts with extended CupConfig)
+// Cup logic functions
 function nearestPowerOf2(n: number): number {
   let p = 2
   while (p < n) p *= 2
@@ -466,28 +260,26 @@ function buildDefaultCups(
 export function PhaseMultiCupForm({
   value,
   onChange,
-  phase1,
+  precedingPhases = [],
 }: {
   value: PhaseMultiCup
   onChange: (v: PhaseMultiCup) => void
-  phase1?: PhaseGroups | PhaseRoundRobin | null
+  precedingPhases?: PhaseConfig[]
 }) {
-  const groupCount = phase1?.kind === 'groups' ? phase1.groupCount : 0
-  const teamsPerGroup = phase1?.kind === 'groups' ? phase1.teamsPerGroup : 0
-  // In multi-cup, all teams from groups qualify — they just go to different cups
+  const groupsPhase = precedingPhases.findLast((p) => p.kind === 'groups') as PhaseGroups | undefined
+  const groupCount = groupsPhase?.groupCount ?? 0
+  const teamsPerGroup = groupsPhase?.teamsPerGroup ?? 0
   const qualifiersPerGroup = teamsPerGroup
   const totalQualified = groupCount * qualifiersPerGroup
   const dist: CupDistribution = value.distribution ?? 'reclassification'
   const maxPos = dist === 'group_position' ? qualifiersPerGroup : totalQualified
 
-  /** Get team count for a cup */
   function teamsFor(cup: CupConfig): number {
     return cupTeams(cup, dist, groupCount)
   }
 
   function updateCup(i: number, patch: Partial<CupConfig>) {
     const updated = { ...value.cups[i], ...patch }
-    // Auto-calculate bracket size when positions change
     if ('from' in patch || 'to' in patch) {
       const teams = cupTeams(updated, dist, groupCount)
       if (teams > 0) updated.size = nearestPowerOf2(teams)
@@ -506,7 +298,6 @@ export function PhaseMultiCupForm({
     onChange({ ...value, cups: value.cups.filter((_, idx) => idx !== i) })
   }
 
-  // Validation
   const totalAssigned = value.cups.reduce((sum, c) => sum + Math.max(0, teamsFor(c)), 0)
   const hasOverlap = value.cups.some((c, i) =>
     value.cups.some((c2, j) => i !== j && c.from <= c2.to && c.to >= c2.from),
@@ -535,9 +326,9 @@ export function PhaseMultiCupForm({
   const posLabel = dist === 'group_position' ? 'Posición en grupo' : 'Posición global'
 
   return (
-    <div className="p-4 bg-indigo-50 rounded-xl border border-indigo-200 space-y-4">
+    <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <p className="text-xs font-bold text-indigo-700 uppercase tracking-wide">Fase 2 — Multi-Copa</p>
+        <p className="text-xs font-bold text-indigo-700 uppercase tracking-wide">Multi-Copa</p>
         <button
           type="button"
           onClick={addCup}
@@ -546,6 +337,13 @@ export function PhaseMultiCupForm({
           <Plus size={12} /> Agregar copa
         </button>
       </div>
+
+      {!groupsPhase && (
+        <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+          Multi-Copa requiere una fase de Grupos anterior. Agrega una fase de Grupos antes de esta.
+        </p>
+      )}
+
       <div className="bg-indigo-100 rounded-lg px-3 py-3 space-y-2">
         <p className="text-xs font-semibold text-indigo-700">Distribución de equipos a copas</p>
         <div className="flex gap-2">
@@ -779,6 +577,267 @@ export function PhaseMultiCupForm({
           )
         })}
       </div>
+    </div>
+  )
+}
+
+// ─── Phase card colors ──────────────────────────────────────────────────────
+
+const PHASE_COLORS: Record<PhaseKind, { bg: string; border: string; text: string }> = {
+  groups:      { bg: 'bg-blue-50',   border: 'border-blue-200',   text: 'text-blue-700' },
+  round_robin: { bg: 'bg-blue-50',   border: 'border-blue-200',   text: 'text-blue-700' },
+  knockout:    { bg: 'bg-indigo-50', border: 'border-indigo-200', text: 'text-indigo-700' },
+  multi_cup:   { bg: 'bg-indigo-50', border: 'border-indigo-200', text: 'text-indigo-700' },
+}
+
+// ─── Main FormatSection ─────────────────────────────────────────────────────
+
+export function FormatSection({
+  formatConfig,
+  onChange,
+  maxTeams,
+}: {
+  formatConfig: FormatConfig
+  onChange: (fc: FormatConfig) => void
+  maxTeams: number
+}) {
+  const phases = formatConfig.phases ?? []
+  const selectedTemplateId = formatConfig.type
+
+  function selectTemplate(templateId: FormatType) {
+    const template = FORMAT_TEMPLATES.find((t) => t.id === templateId)!
+    const prefill = buildPrefill(template, maxTeams)
+    onChange({ ...formatConfig, ...prefill })
+  }
+
+  function updatePhase(index: number, phase: PhaseConfig) {
+    const newPhases = [...phases]
+    newPhases[index] = phase
+    onChange({ ...formatConfig, phases: newPhases, type: deriveFormatType(newPhases) })
+  }
+
+  function changePhaseKind(index: number, kind: PhaseKind) {
+    const newPhases = [...phases]
+    newPhases[index] = buildPhaseDefault(kind, maxTeams, newPhases.slice(0, index))
+    onChange({ ...formatConfig, phases: newPhases, type: deriveFormatType(newPhases) })
+  }
+
+  function removePhase(index: number) {
+    const newPhases = phases.filter((_, i) => i !== index)
+    onChange({ ...formatConfig, phases: newPhases, type: deriveFormatType(newPhases) })
+  }
+
+  function addPhase(kind: PhaseKind) {
+    const newPhases = [...phases, buildPhaseDefault(kind, maxTeams, phases)]
+    onChange({ ...formatConfig, phases: newPhases, type: deriveFormatType(newPhases) })
+  }
+
+  function movePhase(index: number, dir: -1 | 1) {
+    const target = index + dir
+    if (target < 0 || target >= phases.length) return
+    const newPhases = [...phases]
+    ;[newPhases[index], newPhases[target]] = [newPhases[target], newPhases[index]]
+    onChange({ ...formatConfig, phases: newPhases, type: deriveFormatType(newPhases) })
+  }
+
+  // Check if next multi_cup has a groups before it
+  function hasGroupsBefore(index: number): boolean {
+    return phases.slice(0, index).some((p) => p.kind === 'groups')
+  }
+
+  return (
+    <div className="space-y-5">
+      {/* Templates */}
+      <div>
+        <p className="text-sm font-semibold text-slate-700 mb-3">Plantilla de formato</p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {FORMAT_TEMPLATES.map(({ id, label, icon, desc }) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => selectTemplate(id)}
+              className={clsx(
+                'flex flex-col items-start gap-1.5 px-4 py-3 rounded-xl border text-left transition-all',
+                selectedTemplateId === id
+                  ? 'border-indigo-400 bg-indigo-50 ring-2 ring-indigo-300 ring-offset-1'
+                  : 'border-slate-200 bg-white hover:border-indigo-200 hover:bg-indigo-50/40',
+              )}
+            >
+              <span className="flex items-center gap-2 text-sm font-bold text-slate-800">
+                <span>{icon}</span> {label}
+              </span>
+              <span className="text-xs text-slate-500 leading-relaxed">{desc}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Dynamic phases list */}
+      <div className="space-y-3">
+        <p className="text-sm font-semibold text-slate-700">Fases del torneo</p>
+
+        {phases.length === 0 && (
+          <p className="text-sm text-slate-400 text-center py-6">
+            Selecciona una plantilla arriba o agrega fases manualmente.
+          </p>
+        )}
+
+        {phases.map((phase, i) => {
+          const colors = PHASE_COLORS[phase.kind]
+          const isMultiCupWithoutGroups = phase.kind === 'multi_cup' && !hasGroupsBefore(i)
+          return (
+            <div key={i} className={clsx('rounded-xl border p-4', colors.bg, colors.border)}>
+              {/* Phase header */}
+              <div className="flex items-center gap-3 mb-3">
+                <span className="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-white border border-slate-200 text-xs font-mono font-bold text-slate-500">
+                  {i + 1}
+                </span>
+                <div className="relative flex-1">
+                  <select
+                    className={clsx(inputCls, 'appearance-none pr-8 text-sm font-bold')}
+                    value={phase.kind}
+                    onChange={(e) => changePhaseKind(i, e.target.value as PhaseKind)}
+                  >
+                    {ALL_PHASE_KINDS.map((k) => (
+                      <option key={k} value={k}>{PHASE_KIND_LABEL[k]}</option>
+                    ))}
+                  </select>
+                  <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                </div>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => movePhase(i, -1)}
+                    disabled={i === 0}
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                    title="Subir"
+                  >
+                    <ArrowUp size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => movePhase(i, 1)}
+                    disabled={i === phases.length - 1}
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                    title="Bajar"
+                  >
+                    <ArrowDown size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => removePhase(i)}
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-white transition-colors"
+                    title="Eliminar fase"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Validation warning */}
+              {isMultiCupWithoutGroups && (
+                <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-3">
+                  Multi-Copa requiere una fase de Grupos anterior.
+                </p>
+              )}
+
+              {/* Phase config form */}
+              {phase.kind === 'groups' && (
+                <PhaseGroupsForm
+                  value={phase}
+                  onChange={(p) => updatePhase(i, p)}
+                  isMultiCup={phases.some((p, j) => j > i && p.kind === 'multi_cup')}
+                  maxTeams={maxTeams}
+                  label={`Fase ${i + 1} — Grupos`}
+                />
+              )}
+              {phase.kind === 'round_robin' && (
+                <PhaseRoundRobinForm
+                  value={phase}
+                  onChange={(p) => updatePhase(i, p)}
+                  label={`Fase ${i + 1} — Todos contra todos`}
+                />
+              )}
+              {phase.kind === 'knockout' && (
+                <PhaseKnockoutForm
+                  value={phase}
+                  onChange={(p) => updatePhase(i, p)}
+                  label={`Fase ${i + 1} — Eliminatoria`}
+                />
+              )}
+              {phase.kind === 'multi_cup' && (
+                <PhaseMultiCupForm
+                  value={phase}
+                  onChange={(p) => updatePhase(i, p)}
+                  precedingPhases={phases.slice(0, i)}
+                />
+              )}
+            </div>
+          )
+        })}
+
+        {/* Add phase button */}
+        <div className="flex items-center gap-2 pt-1">
+          <div className="relative flex-1">
+            <select
+              className={clsx(inputCls, 'appearance-none pr-8')}
+              value=""
+              onChange={(e) => {
+                if (e.target.value) addPhase(e.target.value as PhaseKind)
+                e.target.value = ''
+              }}
+            >
+              <option value="" disabled>Agregar fase...</option>
+              {ALL_PHASE_KINDS.map((k) => (
+                <option key={k} value={k}>{PHASE_KIND_LABEL[k]}</option>
+              ))}
+            </select>
+            <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+          </div>
+        </div>
+      </div>
+
+      {/* Match rules */}
+      {phases.length > 0 && (
+        <div className="pt-2 border-t border-slate-100 space-y-3">
+          <p className="text-sm font-semibold text-slate-700">Reglas del partido</p>
+          <div className="grid grid-cols-2 gap-3">
+            <Toggle
+              checked={formatConfig.hasExtraTime ?? false}
+              onChange={(v) => onChange({ ...formatConfig, hasExtraTime: v })}
+              label="Tiempo extra"
+              description="Si el partido termina empatado."
+            />
+            <Toggle
+              checked={formatConfig.hasPenalties ?? false}
+              onChange={(v) => onChange({ ...formatConfig, hasPenalties: v })}
+              label="Penales"
+              description="Si persiste el empate."
+            />
+          </div>
+          <div className="flex items-end gap-4">
+            <div className="w-44">
+              <Field label="Minutos por tiempo">
+                <div className="relative">
+                  <input
+                    type="number" min={5} max={60}
+                    className={inputCls}
+                    value={formatConfig.minutesPerHalf ?? ''}
+                    onChange={(e) => onChange({ ...formatConfig, minutesPerHalf: parseInt(e.target.value) || undefined })}
+                    placeholder="25"
+                  />
+                  <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs text-slate-400 pointer-events-none">min</span>
+                </div>
+              </Field>
+            </div>
+            {formatConfig.minutesPerHalf ? (
+              <div className="flex items-center gap-2 mb-1 px-4 py-2.5 bg-indigo-50 border border-indigo-200 rounded-xl">
+                <span className="text-sm font-semibold text-indigo-700">{formatConfig.minutesPerHalf * 2} min totales</span>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

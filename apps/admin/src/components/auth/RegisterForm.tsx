@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -16,7 +16,7 @@ const schema = z
     email: z.string().email('Email inválido'),
     password: z.string().min(6, 'Mínimo 6 caracteres'),
     confirmPassword: z.string(),
-    orgName: z.string().min(3, 'Mínimo 3 caracteres'),
+    orgName: z.string().optional(),
   })
   .refine((d) => d.password === d.confirmPassword, {
     message: 'Las contraseñas no coinciden',
@@ -27,6 +27,11 @@ type FormValues = z.infer<typeof schema>
 
 export function RegisterForm() {
   const router = useRouter()
+  // Quien llega con ?redirect= viene invitado a una tarea concreta (dirigir un
+  // partido, por ejemplo): no crea organización ni pasa por el onboarding.
+  const searchParams = useSearchParams()
+  const redirect = searchParams.get('redirect')
+  const isInvited = !!redirect && redirect !== '/'
   const [showPassword, setShowPassword] = useState(false)
   const [authError, setAuthError] = useState<string | null>(null)
   const [googleLoading, setGoogleLoading] = useState(false)
@@ -49,7 +54,11 @@ export function RegisterForm() {
     setAuthError(null)
     try {
       await signUp(values.email, values.password, values.displayName)
-      await createOrganization(values.orgName)
+      if (isInvited) {
+        router.push(redirect!)
+        return
+      }
+      if (values.orgName?.trim()) await createOrganization(values.orgName.trim())
       router.push('/onboarding')
     } catch (err: unknown) {
       const code = (err as { code?: string }).code ?? ''
@@ -62,7 +71,7 @@ export function RegisterForm() {
     setGoogleLoading(true)
     try {
       await signInWithGoogle()
-      router.push('/onboarding')
+      router.push(isInvited ? redirect! : '/onboarding')
     } catch (err: unknown) {
       const code = (err as { code?: string }).code ?? ''
       setAuthError(getFirebaseErrorMessage(code))
@@ -166,7 +175,7 @@ export function RegisterForm() {
           </div>
         </div>
 
-        <div>
+        <div className={isInvited ? 'hidden' : undefined}>
           <label className="block text-sm font-medium text-slate-700 mb-1">
             Nombre de tu organización
           </label>

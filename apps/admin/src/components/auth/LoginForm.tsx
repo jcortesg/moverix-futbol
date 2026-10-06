@@ -32,9 +32,29 @@ export function LoginForm() {
   } = useForm<FormValues>({ resolver: zodResolver(schema) })
 
   async function redirectAfterLogin() {
+    // Un destino explícito manda (p. ej. una invitación a dirigir un partido).
+    if (redirect && redirect !== '/') {
+      router.push(redirect)
+      return
+    }
     try {
       const { data } = await api.get('/organizations')
-      router.push(data.length === 0 ? '/onboarding' : redirect)
+      if (data.length > 0) {
+        router.push(redirect)
+        return
+      }
+      // Sin organización: si tiene partidos asignados es un delegado, y su
+      // pantalla es la de dirigir, no el onboarding de crear una liga.
+      try {
+        const { data: matches } = await api.get('/mobile/referee/matches')
+        if (Array.isArray(matches) && matches.length > 0) {
+          router.push('/dirigir')
+          return
+        }
+      } catch {
+        /* sin acceso a partidos: sigue al onboarding */
+      }
+      router.push('/onboarding')
     } catch {
       router.push(redirect)
     }
@@ -168,7 +188,10 @@ export function LoginForm() {
 
       <p className="text-center text-sm text-slate-500 pt-1">
         ¿No tienes cuenta?{' '}
-        <Link href="/registro" className="text-green-600 hover:text-green-700 font-semibold">
+        <Link
+          href={redirect && redirect !== '/' ? `/registro?redirect=${encodeURIComponent(redirect)}` : '/registro'}
+          className="text-green-600 hover:text-green-700 font-semibold"
+        >
           Regístrate gratis
         </Link>
       </p>

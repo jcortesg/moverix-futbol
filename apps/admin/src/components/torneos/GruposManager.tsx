@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import {
   ChevronLeft, Loader2, AlertCircle, Plus, Layers, Shuffle, Wand2, Shield,
-  Pencil, Trash2, Save, X, UserMinus, Users,
+  Pencil, Trash2, Save, X, UserMinus, Users, Calendar, ChevronDown, Swords,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import {
@@ -22,6 +22,9 @@ import {
   type RegistrationFromApi,
 } from '@/lib/registrations'
 import { getEdition, type EditionFromApi } from '@/lib/leagues'
+import { getMatchesByEdition, type MatchFromApi } from '@/lib/matches'
+import { getBracket, type BracketSlotFromApi } from '@/lib/brackets'
+import { CupsBracketView } from './CupsBracketView'
 import { Field, inputCls } from '@/components/ui/form'
 
 export function GruposManager({
@@ -36,6 +39,8 @@ export function GruposManager({
   const [edition, setEdition] = useState<EditionFromApi | null>(null)
   const [groups, setGroups] = useState<GroupFromApi[]>([])
   const [registrations, setRegistrations] = useState<RegistrationFromApi[]>([])
+  const [matches, setMatches] = useState<MatchFromApi[]>([])
+  const [bracket, setBracket] = useState<BracketSlotFromApi[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
@@ -43,12 +48,17 @@ export function GruposManager({
   const [assignToGroupId, setAssignToGroupId] = useState<string | null>(null)
 
   async function reload() {
-    const [g, r] = await Promise.all([
+    const [g, r, m, b] = await Promise.all([
       getGroupsByEdition(editionId),
       getRegistrationsByEdition(editionId),
+      getMatchesByEdition(editionId),
+      // Sin llaves sorteadas devuelve vacío: la sección no se muestra.
+      getBracket(editionId).catch(() => [] as BracketSlotFromApi[]),
     ])
     setGroups(g)
     setRegistrations(r)
+    setMatches(m)
+    setBracket(b)
   }
 
   useEffect(() => {
@@ -60,17 +70,21 @@ export function GruposManager({
       .finally(() => setLoading(false))
   }, [editionId])
 
-  // Approved registrations grouped by group + the unassigned pool
-  const approved = useMemo(() => registrations.filter((r) => r.status === 'approved'), [registrations])
+  // Equipos visibles (todos salvo rechazados/retirados) agrupados por grupo + pool sin asignar.
+  // Incluye draft/pending para que se vean en los grupos, no solo los aprobados.
+  const visibles = useMemo(
+    () => registrations.filter((r) => r.status !== 'rejected' && r.status !== 'withdrawn'),
+    [registrations],
+  )
   const byGroup = useMemo(() => {
     const m = new Map<string, RegistrationFromApi[]>()
     for (const g of groups) m.set(g.id, [])
-    for (const r of approved) {
+    for (const r of visibles) {
       if (r.groupId && m.has(r.groupId)) m.get(r.groupId)!.push(r)
     }
     return m
-  }, [groups, approved])
-  const unassigned = useMemo(() => approved.filter((r) => !r.groupId), [approved])
+  }, [groups, visibles])
+  const unassigned = useMemo(() => visibles.filter((r) => !r.groupId), [visibles])
 
   async function run<T>(key: string, fn: () => Promise<T>): Promise<T | undefined> {
     setBusy(key)
@@ -169,7 +183,7 @@ export function GruposManager({
   }
 
   const canGenerate = groups.length === 0
-  const canDraw = groups.length > 0 && approved.length > 0
+  const canDraw = groups.length > 0 && visibles.length > 0
 
   return (
     <div>
@@ -229,7 +243,7 @@ export function GruposManager({
           </div>
           <div>
             <p className="text-sm font-bold text-slate-900">
-              {groups.length} {groups.length === 1 ? 'grupo' : 'grupos'} · {approved.length} equipos aprobados
+              {groups.length} {groups.length === 1 ? 'grupo' : 'grupos'} · {visibles.length} equipos
             </p>
             <p className="text-xs text-slate-400">
               {unassigned.length > 0
@@ -279,6 +293,8 @@ export function GruposManager({
               key={g.id}
               group={g}
               members={byGroup.get(g.id) ?? []}
+              matches={matches.filter((m) => m.groupId === g.id)}
+              teamName={(id) => registrations.find((r) => r.teamId === id)?.team?.name ?? 'TBD'}
               busy={busy?.startsWith('update-' + g.id) || busy?.startsWith('delete-' + g.id)}
               onUpdate={(patch) => handleUpdateGroup(g.id, patch)}
               onDelete={() => handleDeleteGroup(g.id)}
@@ -324,6 +340,36 @@ export function GruposManager({
         </div>
       )}
 
+      {/* Las llaves: la pantalla se llama "Grupos y llaves", así que el cuadro
+          va aquí mismo. Generarlo o resetearlo sigue en Fase eliminatoria. */}
+      <div className="mt-6">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <Swords size={15} className="text-indigo-700" />
+            <h2 className="text-sm font-bold text-slate-900">Fase eliminatoria</h2>
+          </div>
+          <Link
+            href={`/torneos/edicion/${editionId}/gestionar/bracket`}
+            className="text-xs font-semibold text-indigo-700 hover:text-indigo-900"
+          >
+            {bracket.length > 0 ? 'Administrar' : 'Generar llaves'}
+          </Link>
+        </div>
+
+        {bracket.length > 0 ? (
+          <CupsBracketView editionId={editionId} mainSlots={bracket} />
+        ) : (
+          <div className="flex flex-col items-center justify-center gap-2 py-10 bg-white rounded-2xl border-2 border-dashed border-slate-200">
+            <Swords size={22} className="text-slate-300" />
+            <p className="text-sm font-semibold text-slate-500">Todavía no hay llaves</p>
+            <p className="text-xs text-slate-400 max-w-sm text-center">
+              El cuadro aparece aquí cuando sortees la eliminatoria con los equipos
+              clasificados de los grupos.
+            </p>
+          </div>
+        )}
+      </div>
+
       {creating && (
         <CreateGroupDialog
           existingCodes={groups.map((g) => g.code)}
@@ -350,10 +396,12 @@ export function GruposManager({
 // ─── Group card ──────────────────────────────────────────────────────────────
 
 function GroupCard({
-  group, members, busy = false, onUpdate, onDelete, onAssignClick, onRemoveTeam,
+  group, members, matches, teamName, busy = false, onUpdate, onDelete, onAssignClick, onRemoveTeam,
 }: {
   group: GroupFromApi
   members: RegistrationFromApi[]
+  matches: MatchFromApi[]
+  teamName: (id: string | null) => string
   busy?: boolean
   onUpdate: (patch: { name?: string; code?: string; maxTeams?: number | null }) => Promise<void>
   onDelete: () => Promise<void>
@@ -361,6 +409,8 @@ function GroupCard({
   onRemoveTeam: (registrationId: string) => Promise<void>
 }) {
   const [editing, setEditing] = useState(false)
+  const [showFixture, setShowFixture] = useState(false)
+  const jugados = matches.filter((m) => m.status === 'finished').length
   const [draft, setDraft] = useState({
     name: group.name,
     code: group.code,
@@ -507,8 +557,61 @@ function GroupCard({
           </div>
         )}
       </div>
+
+      {/* Fixture del grupo */}
+      {matches.length > 0 && (
+        <div className="border-t border-slate-100">
+          <button
+            onClick={() => setShowFixture((v) => !v)}
+            className="w-full flex items-center justify-between px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400 hover:bg-slate-50 transition-colors"
+          >
+            <span className="flex items-center gap-1.5">
+              <Calendar size={11} /> Fixture
+              <span className="font-semibold normal-case tracking-normal text-slate-400">
+                · {jugados} de {matches.length} jugados
+              </span>
+            </span>
+            <ChevronDown size={12} className={clsx('transition-transform', showFixture && 'rotate-180')} />
+          </button>
+
+          {showFixture && (
+            <div className="px-4 pb-3 space-y-1">
+              {[...matches]
+                .sort((a, b) => (a.scheduledAt ?? 'z').localeCompare(b.scheduledAt ?? 'z'))
+                .map((m) => {
+                  const fin = m.status === 'finished'
+                  return (
+                    <div key={m.id} className="flex items-center gap-2 rounded-lg bg-slate-50 px-2 py-1.5">
+                      <span className="flex-1 truncate text-right text-[11px] text-slate-700">
+                        {teamName(m.homeTeamId)}
+                      </span>
+                      <span className={clsx(
+                        'shrink-0 rounded px-1.5 py-0.5 text-[11px] font-bold tabular-nums',
+                        fin ? 'bg-slate-800 text-white' : 'bg-white border border-slate-200 text-slate-400',
+                      )}>
+                        {fin ? `${m.homeScore ?? 0} - ${m.awayScore ?? 0}` : 'vs'}
+                      </span>
+                      <span className="flex-1 truncate text-[11px] text-slate-700">
+                        {teamName(m.awayTeamId)}
+                      </span>
+                      <span className="w-24 shrink-0 text-right text-[10px] text-slate-400">
+                        {m.scheduledAt ? fmtKickoff(m.scheduledAt) : 'sin fecha'}
+                      </span>
+                    </div>
+                  )
+                })}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
+}
+
+/** "12 sep · 5:30 p. m." en hora de Bogotá */
+function fmtKickoff(iso: string) {
+  const d = new Date(iso)
+  return `${d.toLocaleDateString('es-CO', { day: 'numeric', month: 'short', timeZone: 'America/Bogota' })} · ${d.toLocaleTimeString('es-CO', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Bogota' })}`
 }
 
 // ─── Team chip ───────────────────────────────────────────────────────────────

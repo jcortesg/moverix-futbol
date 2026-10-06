@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import {
   AlertCircle, BarChart2, ChevronLeft, Loader2, Shield, Trophy, Swords, Table2,
+  Download, Goal,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import {
@@ -15,6 +16,10 @@ import {
   type Qualifier,
 } from '@/lib/standings'
 import { getEdition, type EditionFromApi } from '@/lib/leagues'
+import { getTopScorers, type PlayerStatFromApi } from '@/lib/player-stats'
+import { downloadReclassificationExcel, downloadScorersExcel } from '@/lib/standings-excel'
+import { getBracket, type BracketSlotFromApi } from '@/lib/brackets'
+import { CupsBracketView } from './CupsBracketView'
 
 export function TablaManager({
   editionId,
@@ -28,15 +33,22 @@ export function TablaManager({
   const [edition, setEdition] = useState<EditionFromApi | null>(null)
   const [standings, setStandings] = useState<StandingGroup[]>([])
   const [qualifiers, setQualifiers] = useState<QualifiersResult | null>(null)
+  const [scorers, setScorers] = useState<PlayerStatFromApi[]>([])
+  const [downloading, setDownloading] = useState<string | null>(null)
+  const [bracket, setBracket] = useState<BracketSlotFromApi[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [tab, setTab] = useState<'groups' | 'reclassification'>('groups')
+  const [tab, setTab] = useState<'groups' | 'reclassification' | 'bracket'>('groups')
 
   useEffect(() => {
     Promise.all([
       getEdition(editionId).then(setEdition),
       getStandingsByEdition(editionId).then(setStandings),
       getQualifiersByEdition(editionId).then(setQualifiers).catch(() => null),
+      // Límite alto: aquí se descarga la tabla completa, no solo el top.
+      getTopScorers(editionId, 500).then(setScorers).catch(() => []),
+      // Sin llaves sorteadas devuelve vacío: la pestaña no se muestra.
+      getBracket(editionId).then(setBracket).catch(() => []),
     ])
       .catch(() => setError('No se pudo cargar la tabla.'))
       .finally(() => setLoading(false))
@@ -46,8 +58,13 @@ export function TablaManager({
   const qualifierByTeam = new Map<string, Qualifier>()
   if (qualifiers) for (const q of qualifiers.qualifiers) qualifierByTeam.set(q.teamId, q)
 
+  // El endpoint de goleadores trae teamId, no el nombre: se resuelve con la tabla.
+  const teamNameById = new Map<string, string>()
+  for (const g of standings) for (const r of g.rows) teamNameById.set(r.teamId, r.teamName)
+
   const realGroups = standings.filter((g) => g.groupId !== null)
   const hasGroups = realGroups.length > 0
+  const hasBracket = bracket.length > 0
   // Auto-switch to reclassification tab when there are no groups
   useEffect(() => {
     if (!loading && !hasGroups) setTab('reclassification')
@@ -86,15 +103,64 @@ export function TablaManager({
       </div>
 
       {/* Header */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 mb-5 flex items-center gap-4">
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 mb-5 flex flex-wrap items-center gap-4">
         <div className="w-10 h-10 rounded-xl bg-purple-50 border border-purple-200 flex items-center justify-center">
           <BarChart2 size={18} className="text-purple-700" />
         </div>
-        <div>
+        <div className="flex-1 min-w-[180px]">
           <h1 className="text-lg font-bold text-slate-900">Tabla de posiciones</h1>
           <p className="text-xs text-slate-500">
             Calculada en tiempo real desde los partidos finalizados.
           </p>
+        </div>
+
+        {/* Descargas para publicar o enviar a los equipos */}
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            disabled={downloading !== null || standings.length === 0}
+            onClick={() => {
+              setDownloading('recla')
+              try {
+                downloadReclassificationExcel({
+                  editionName: edition?.name ?? 'Torneo',
+                  standings,
+                })
+              } finally {
+                setDownloading(null)
+              }
+            }}
+            className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-50 disabled:opacity-50"
+          >
+            {downloading === 'recla' ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
+            Reclasificación
+          </button>
+          <button
+            type="button"
+            disabled={downloading !== null || scorers.length === 0}
+            title={scorers.length === 0 ? 'Aún no hay goles registrados' : undefined}
+            onClick={() => {
+              setDownloading('scorers')
+              try {
+                downloadScorersExcel({
+                  editionName: edition?.name ?? 'Torneo',
+                  scorers,
+                  teamNameById,
+                })
+              } finally {
+                setDownloading(null)
+              }
+            }}
+            className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-50 disabled:opacity-50"
+          >
+            {downloading === 'scorers' ? <Loader2 size={13} className="animate-spin" /> : <Goal size={13} />}
+            Goleadores
+            {scorers.length > 0 && (
+              <span className="rounded bg-slate-100 px-1 py-0.5 text-[10px] font-bold text-slate-400">
+                {scorers.length}
+              </span>
+            )}
+          </button>
         </div>
       </div>
 
@@ -142,6 +208,21 @@ export function TablaManager({
                 <Swords size={15} />
                 Reclasificación
               </button>
+              {hasBracket && (
+                <button
+                  type="button"
+                  onClick={() => setTab('bracket')}
+                  className={clsx(
+                    'flex items-center gap-2 px-4 py-3 text-sm font-semibold border-b-2 transition-colors whitespace-nowrap',
+                    tab === 'bracket'
+                      ? 'border-purple-600 text-purple-700'
+                      : 'border-transparent text-slate-500 hover:text-slate-800 hover:border-slate-300',
+                  )}
+                >
+                  <Trophy size={15} />
+                  Llaves
+                </button>
+              )}
             </div>
           </div>
 
@@ -163,6 +244,20 @@ export function TablaManager({
               standings={standings}
               qualifiers={qualifiers}
             />
+          )}
+
+          {/* Solo lectura: generar o resetear las llaves sigue en Fase eliminatoria. */}
+          {tab === 'bracket' && hasBracket && (
+            <div className="space-y-3">
+              <CupsBracketView editionId={editionId} mainSlots={bracket} />
+              <Link
+                href={`/torneos/edicion/${editionId}/gestionar/bracket`}
+                className="inline-flex items-center gap-1.5 text-xs font-semibold text-purple-700 hover:text-purple-900"
+              >
+                <Swords size={13} />
+                Administrar la fase eliminatoria
+              </Link>
+            </div>
           )}
         </>
       )}

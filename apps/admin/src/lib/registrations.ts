@@ -1,7 +1,7 @@
 import { api } from './api'
 import type { TeamFromApi } from './teams'
 
-export type RegistrationStatus = 'pending' | 'approved' | 'rejected' | 'withdrawn'
+export type RegistrationStatus = 'draft' | 'pending' | 'approved' | 'rejected' | 'withdrawn'
 
 export type RegistrationFromApi = {
   id: string
@@ -12,10 +12,16 @@ export type RegistrationFromApi = {
   seedRank: number | null
   registeredByUid: string | null
   paidAt: string | null
+  /** null = hereda el cierre general; true = cerrada; false = abierta por excepción. */
+  rosterLocked: boolean | null
+  /** Resumen de la plantilla (lo calcula el backend por edición). */
+  playersCount?: number
+  playersComplete?: number
+  playersIncomplete?: number
   approvedAt: string | null
   createdAt: string
   updatedAt: string
-  team: Pick<TeamFromApi, 'id' | 'name' | 'shortName' | 'logoUrl' | 'primaryColor' | 'secondaryColor' | 'city' | 'directorUid'>
+  team: Pick<TeamFromApi, 'id' | 'name' | 'shortName' | 'logoUrl' | 'primaryColor' | 'secondaryColor' | 'city' | 'directorUid' | 'pendingDelegateEmail'>
 }
 
 export type CreateRegistrationDto = {
@@ -28,6 +34,8 @@ export type UpdateRegistrationDto = {
   status?: RegistrationStatus
   groupId?: string | null
   seedRank?: number
+  /** null hereda el cierre general, true cierra, false abre por excepción. */
+  rosterLocked?: boolean | null
 }
 
 export async function createRegistration(dto: CreateRegistrationDto): Promise<RegistrationFromApi> {
@@ -88,10 +96,16 @@ export type RegistrationPlayer = {
   firstName: string | null
   lastName: string | null
   docNumber: string | null
+  birthDate: string | null
+  employer: string | null
+  healthProvider: string | null
   phone: string | null
   email: string | null
   position: string | null
   jerseyNumber: number | null
+  emergencyContactName: string | null
+  emergencyContactPhone: string | null
+  docFileUrl: string | null
   addedAt: string
 }
 
@@ -102,10 +116,15 @@ export type CreateRegistrationPlayerDto = {
   firstName?: string
   lastName?: string
   docNumber?: string
+  birthDate?: string
+  employer?: string
+  healthProvider?: string
   phone?: string
   email?: string
   position?: string
   jerseyNumber?: number
+  emergencyContactName?: string
+  emergencyContactPhone?: string
 }
 
 export async function getRegistrationPlayers(registrationId: string): Promise<RegistrationPlayer[]> {

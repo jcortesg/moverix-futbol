@@ -3,12 +3,14 @@
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import {
-  AlertCircle, ChevronLeft, Loader2, Swords, Wand2, Trophy,
-  RotateCcw, Shield,
+  AlertCircle, ChevronLeft, Loader2, Swords, Wand2, RotateCcw, Medal, Info,
 } from 'lucide-react'
 import { clsx } from 'clsx'
+import { BracketCanvas, roundLabel } from './BracketCanvas'
 import {
+  cupLabel,
   generateBracket,
+  generateConsolationBracket,
   getBracket,
   getBracketCups,
   resetBracket,
@@ -21,20 +23,6 @@ type Props = {
   backLabel?: string
 }
 
-// ─── Round labels ────────────────────────────────────────────────────────────
-
-function roundLabel(round: number, totalRounds: number): string {
-  const fromFinal = totalRounds - round
-  switch (fromFinal) {
-    case 0: return 'Final'
-    case 1: return 'Semifinales'
-    case 2: return 'Cuartos'
-    case 3: return 'Octavos'
-    case 4: return '16avos'
-    default: return `Ronda ${round}`
-  }
-}
-
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export function BracketManager({ editionId, backHref, backLabel = 'Gestionar' }: Props) {
@@ -44,6 +32,7 @@ export function BracketManager({ editionId, backHref, backLabel = 'Gestionar' }:
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
 
   const reload = useCallback(async (cup?: string) => {
     try {
@@ -77,6 +66,45 @@ export function BracketManager({ editionId, backHref, backLabel = 'Gestionar' }:
     }
   }
 
+  /**
+   * Copa de consolación: la arman los perdedores de la primera ronda de esta
+   * copa. No toca el cuadro actual, solo crea uno nuevo enlazado a él.
+   */
+  async function handleGenerateConsolation() {
+    const nombre = prompt(
+      'Nombre de la copa para los perdedores de la primera ronda (ej. "plata"):',
+      'plata',
+    )?.trim()
+    if (!nombre) return
+
+    setBusy('consolation')
+    setError(null)
+    try {
+      const res = await generateConsolationBracket(editionId, nombre, activeCup, 1)
+      await reload()
+      setActiveCup(res.cupName)
+      await reload(res.cupName)
+      const partes = [`Copa "${res.cupName}" creada con ${res.bracketSize} lugares.`]
+      if (res.backfilled > 0) {
+        partes.push(`Ya bajaron ${res.backfilled} equipo(s) de llaves jugadas.`)
+      } else {
+        partes.push(
+          `Los equipos entran a medida que se jueguen los partidos de ${roundLabel(1, totalRounds, hasByes).toLowerCase()}.`,
+        )
+      }
+      if (res.byesInSource > 0) {
+        partes.push(
+          `Ojo: ${res.byesInSource} llave(s) de origen pasan sin jugar, así que no aportan perdedor y dejarán ese lugar vacío.`,
+        )
+      }
+      setNotice(partes.join(' '))
+    } catch (err) {
+      setError(extractError(err) ?? 'Error al crear la copa de consolación.')
+    } finally {
+      setBusy(null)
+    }
+  }
+
   async function handleReset() {
     if (!confirm('¿Estás seguro? Esto elimina el bracket y sus partidos asociados.')) return
     setBusy('resetting')
@@ -101,6 +129,27 @@ export function BracketManager({ editionId, backHref, backLabel = 'Gestionar' }:
   const roundNumbers = [...rounds.keys()].sort((a, b) => a - b)
   const totalRounds = roundNumbers.length > 0 ? Math.max(...roundNumbers) : 0
   const hasBracket = slots.length > 0
+
+  // Una llave sin los dos equipos en la ronda 1 es un bye: el cabeza de serie
+  // pasa sin jugar y la ronda se llama Repechaje.
+  const hasByes = (rounds.get(1) ?? []).some((sl) => !sl.homeTeamId || !sl.awayTeamId)
+
+  // Esta copa ya manda sus perdedores a otra: no se ofrece crear una segunda.
+  const sendsLosersAway = (rounds.get(1) ?? []).some((sl) => sl.loserNextSlotId)
+
+  // Estado de cada ronda, para ver de un vistazo en cuál va el campeonato.
+  const roundStatus = new Map<number, { jugadas: number; total: number; estado: 'lista' | 'en_juego' | 'pendiente' }>()
+  for (const rn of roundNumbers) {
+    const rs = rounds.get(rn) ?? []
+    const jugadas = rs.filter((sl) => sl.winnerId).length
+    const listas = rs.filter((sl) => sl.homeTeamId && sl.awayTeamId).length
+    roundStatus.set(rn, {
+      jugadas,
+      total: rs.length,
+      estado: jugadas === rs.length ? 'lista' : listas > 0 ? 'en_juego' : 'pendiente',
+    })
+  }
+  const rondaActual = roundNumbers.find((rn) => roundStatus.get(rn)!.estado !== 'lista') ?? null
 
   // ─── Render ────────────────────────────────────────────────────────────────
 
@@ -144,6 +193,19 @@ export function BracketManager({ editionId, backHref, backLabel = 'Gestionar' }:
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {hasBracket && !sendsLosersAway && (
+            <button
+              onClick={handleGenerateConsolation}
+              disabled={busy !== null}
+              title="Crea una copa aparte con los perdedores de la primera ronda de esta copa"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-indigo-200 text-xs font-semibold text-indigo-700 hover:bg-indigo-50 transition-colors disabled:opacity-50"
+            >
+              {busy === 'consolation'
+                ? <Loader2 size={13} className="animate-spin" />
+                : <Medal size={13} />}
+              Copa de consolación
+            </button>
+          )}
           {hasBracket && (
             <button
               onClick={handleReset}
@@ -174,6 +236,29 @@ export function BracketManager({ editionId, backHref, backLabel = 'Gestionar' }:
         </div>
       )}
 
+      {/* Aviso de la copa de consolación recién creada */}
+      {notice && (
+        <div className="flex items-start gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-800 mb-4">
+          <Info size={14} className="mt-0.5 shrink-0" />
+          <span className="flex-1">{notice}</span>
+          <button
+            onClick={() => setNotice(null)}
+            className="text-xs font-semibold text-indigo-600 hover:text-indigo-900"
+          >
+            Entendido
+          </button>
+        </div>
+      )}
+
+      {/* Esta copa alimenta a otra: se dice, para que no sorprenda. */}
+      {hasBracket && sendsLosersAway && (
+        <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-xs text-slate-600 mb-4">
+          <Medal size={13} className="text-indigo-600 shrink-0" />
+          Los perdedores de {roundLabel(1, totalRounds, hasByes).toLowerCase()} pasan a la copa de
+          consolación en lugar de quedar eliminados.
+        </div>
+      )}
+
       {/* Cup tabs (for multi-cup) */}
       {cups.length > 1 && (
         <div className="flex items-center gap-2 mb-4">
@@ -188,7 +273,7 @@ export function BracketManager({ editionId, backHref, backLabel = 'Gestionar' }:
                   : 'bg-slate-100 text-slate-600 hover:bg-slate-200',
               )}
             >
-              {cup === 'main' ? 'Principal' : cup.replace(/^cup_/, '').replace(/_/g, ' ')}
+              {cupLabel(cups, cup)}
             </button>
           ))}
         </div>
@@ -205,161 +290,49 @@ export function BracketManager({ editionId, backHref, backLabel = 'Gestionar' }:
         </div>
       )}
 
-      {/* Bracket visualization */}
+      {/* Rondas del campeonato: en cuál va y qué falta */}
       {hasBracket && (
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-x-auto">
-          <div className="flex gap-0 min-w-max p-6">
-            {roundNumbers.map((roundNum, rIdx) => {
-              const roundSlots = rounds.get(roundNum) ?? []
-              const label = roundLabel(roundNum, totalRounds)
-              const isFinal = roundNum === totalRounds
-
-              return (
-                <div key={roundNum} className="flex flex-col items-center" style={{ minWidth: 220 }}>
-                  {/* Round header */}
-                  <div className={clsx(
-                    'text-[10px] font-bold uppercase tracking-widest mb-4 px-3 py-1 rounded-full',
-                    isFinal
-                      ? 'bg-amber-100 text-amber-700 border border-amber-200'
-                      : 'bg-slate-100 text-slate-500',
-                  )}>
-                    {isFinal && <Trophy size={10} className="inline mr-1 -mt-0.5" />}
-                    {label}
-                  </div>
-
-                  {/* Slots */}
-                  <div
-                    className="flex flex-col justify-around flex-1 gap-2"
-                    style={{ minHeight: roundSlots.length * 90 }}
-                  >
-                    {roundSlots.map((slot) => (
-                      <SlotCard key={slot.id} slot={slot} isFinal={isFinal} />
-                    ))}
-                  </div>
-
-                  {/* Connector lines between rounds */}
-                  {rIdx < roundNumbers.length - 1 && (
-                    <div className="w-px" />
-                  )}
-                </div>
-              )
-            })}
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ─── Slot Card ───────────────────────────────────────────────────────────────
-
-function SlotCard({ slot, isFinal }: { slot: BracketSlotFromApi; isFinal: boolean }) {
-  const isFinished = slot.matchStatus === 'finished'
-  const hasTeams = slot.homeTeamId || slot.awayTeamId
-
-  if (!hasTeams) {
-    return (
-      <div className="w-48 rounded-xl border-2 border-dashed border-slate-200 bg-slate-50/50 px-3 py-3 flex items-center justify-center">
-        <span className="text-[11px] text-slate-300 italic">Por definir</span>
-      </div>
-    )
-  }
-
-  return (
-    <div className={clsx(
-      'w-48 rounded-xl border overflow-hidden transition-shadow',
-      isFinal ? 'border-amber-200 shadow-md' : 'border-slate-200',
-      isFinished ? 'bg-white' : 'bg-white',
-    )}>
-      {/* Home team */}
-      <TeamRow
-        name={slot.homeTeamName ?? null}
-        logoUrl={slot.homeTeamLogoUrl ?? null}
-        score={slot.homeScore ?? null}
-        penalties={slot.homePenalties ?? null}
-        isWinner={slot.winnerId === slot.homeTeamId && slot.winnerId !== null}
-        isFinished={isFinished}
-        isEmpty={!slot.homeTeamId}
-      />
-      <div className="border-t border-slate-100" />
-      {/* Away team */}
-      <TeamRow
-        name={slot.awayTeamName ?? null}
-        logoUrl={slot.awayTeamLogoUrl ?? null}
-        score={slot.awayScore ?? null}
-        penalties={slot.awayPenalties ?? null}
-        isWinner={slot.winnerId === slot.awayTeamId && slot.winnerId !== null}
-        isFinished={isFinished}
-        isEmpty={!slot.awayTeamId}
-      />
-    </div>
-  )
-}
-
-function TeamRow({
-  name, logoUrl, score, penalties, isWinner, isFinished, isEmpty,
-}: {
-  name: string | null
-  logoUrl: string | null
-  score: number | null
-  penalties: number | null
-  isWinner: boolean
-  isFinished: boolean
-  isEmpty: boolean
-}) {
-  if (isEmpty) {
-    return (
-      <div className="flex items-center gap-2 px-3 py-2.5 min-h-[38px]">
-        <span className="text-[11px] text-slate-300 italic">Por definir</span>
-      </div>
-    )
-  }
-
-  return (
-    <div className={clsx(
-      'flex items-center gap-2 px-3 py-2.5 min-h-[38px] transition-colors',
-      isWinner && isFinished && 'bg-green-50',
-      !isWinner && isFinished && 'opacity-50',
-    )}>
-      {/* Logo */}
-      {logoUrl ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={logoUrl} alt="" className="w-5 h-5 rounded-md object-cover flex-shrink-0" />
-      ) : (
-        <div className="w-5 h-5 rounded-md bg-slate-100 flex items-center justify-center flex-shrink-0">
-          <Shield size={10} className="text-slate-400" />
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          {roundNumbers.map((rn) => {
+            const st = roundStatus.get(rn)!
+            const actual = rn === rondaActual
+            return (
+              <div
+                key={rn}
+                className={clsx(
+                  'flex items-center gap-2 rounded-xl border px-3 py-2',
+                  actual
+                    ? 'border-green-300 bg-green-50'
+                    : st.estado === 'lista'
+                      ? 'border-slate-200 bg-white'
+                      : 'border-slate-200 bg-slate-50',
+                )}
+              >
+                <span className={clsx(
+                  'text-[11px] font-bold uppercase tracking-wide',
+                  actual ? 'text-green-700' : st.estado === 'lista' ? 'text-slate-500' : 'text-slate-400',
+                )}>
+                  {roundLabel(rn, totalRounds, hasByes)}
+                </span>
+                <span className={clsx(
+                  'rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums',
+                  st.estado === 'lista' ? 'bg-slate-100 text-slate-500'
+                    : actual ? 'bg-green-600 text-white' : 'bg-slate-200 text-slate-500',
+                )}>
+                  {st.jugadas}/{st.total}
+                </span>
+                {actual && <span className="text-[10px] font-semibold text-green-700">en juego</span>}
+              </div>
+            )
+          })}
+          {rondaActual === null && (
+            <span className="text-[11px] font-semibold text-amber-700">Torneo definido</span>
+          )}
         </div>
       )}
 
-      {/* Name */}
-      <span className={clsx(
-        'text-xs truncate flex-1',
-        isWinner && isFinished ? 'font-bold text-green-800' : 'font-medium text-slate-700',
-      )}>
-        {name ?? '?'}
-      </span>
-
-      {/* Score */}
-      {score !== null && (
-        <span className={clsx(
-          'text-sm tabular-nums font-bold min-w-[18px] text-center',
-          isWinner && isFinished ? 'text-green-700' : 'text-slate-600',
-        )}>
-          {score}
-        </span>
-      )}
-
-      {/* Penalties */}
-      {penalties !== null && (
-        <span className="text-[10px] text-slate-400 font-mono">
-          ({penalties})
-        </span>
-      )}
-
-      {/* Winner indicator */}
-      {isWinner && isFinished && (
-        <Trophy size={11} className="text-amber-500 flex-shrink-0" />
-      )}
+      {/* Cuadro */}
+      {hasBracket && <BracketCanvas slots={slots} />}
     </div>
   )
 }

@@ -5,16 +5,18 @@ import Link from 'next/link'
 import {
   AlertCircle, Calendar, ChevronLeft, Loader2, Shield,
   Wand2, Clock, MapPin, UserCheck, X, Save, Trash2, Pencil, CheckCircle2, Award,
+  Plus, CalendarPlus,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { getEdition, type EditionFromApi } from '@/lib/leagues'
 import { useActiveOrganization } from '@/contexts/ActiveOrganizationContext'
-import { getMatchdays, type MatchdayFromApi } from '@/lib/matchdays'
+import { getMatchdays, createMatchday, deleteMatchday, type MatchdayFromApi } from '@/lib/matchdays'
 import {
   generateFixture,
   finalizeMatch,
   updateMatch,
   deleteMatch,
+  createMatch,
   getMatchesByEdition,
   type MatchFromApi,
   type MatchStatus,
@@ -59,6 +61,8 @@ export function PartidosManager({
   const [editing, setEditing] = useState<MatchFromApi | null>(null)
   const [finalizing, setFinalizing] = useState<MatchFromApi | null>(null)
   const [eventsFor, setEventsFor] = useState<MatchFromApi | null>(null)
+  const [creatingMatchday, setCreatingMatchday] = useState(false)
+  const [addingMatch, setAddingMatch] = useState(false)
 
   async function reload() {
     const [mdays, ms, grps, regs] = await Promise.all([
@@ -165,18 +169,61 @@ export function PartidosManager({
 
   async function handleSchedule(match: MatchFromApi, patch: Parameters<typeof updateMatch>[1]) {
     const updated = await updateMatch(match.id, patch)
+    // Si cambió de jornada, el partido sale de la vista actual: recargar para
+    // que el conteo de cada jornada quede al día.
+    if (patch.matchdayId && patch.matchdayId !== match.matchdayId) {
+      await reload()
+      return
+    }
     setMatches((prev) => prev.map((m) => (m.id === match.id ? { ...m, ...updated } : m)))
   }
 
-  async function handleFinalize(match: MatchFromApi, dto: { homeScore: number; awayScore: number }) {
+  async function handleFinalize(
+    match: MatchFromApi,
+    dto: { homeScore: number; awayScore: number; homePenalties?: number; awayPenalties?: number },
+  ) {
     const updated = await finalizeMatch(match.id, dto)
     setMatches((prev) => prev.map((m) => (m.id === match.id ? { ...m, ...updated } : m)))
+    // Al finalizar una llave la API crea el partido de la ronda siguiente.
+    await reload()
   }
 
   async function handleDelete(match: MatchFromApi) {
-    if (!confirm('¿Eliminar este partido?')) return
-    await deleteMatch(match.id)
-    setMatches((prev) => prev.filter((m) => m.id !== match.id))
+    if (!confirm('¿Eliminar este partido? Solo se puede si nunca se jugó.')) return
+    await run(`delete-${match.id}`, async () => {
+      await deleteMatch(match.id)
+      setMatches((prev) => prev.filter((m) => m.id !== match.id))
+    })
+  }
+
+  async function handleCreateMatchday(dto: { number: number; name: string; scheduledDate?: string }) {
+    const md = await createMatchday({
+      editionId,
+      number: dto.number,
+      name: dto.name,
+      phase: 'groups',
+      scheduledDate: dto.scheduledDate,
+    })
+    await reload()
+    setActiveMatchdayId(md.id)
+  }
+
+  async function handleAddMatch(dto: Parameters<typeof createMatch>[0]) {
+    await createMatch(dto)
+    await reload()
+  }
+
+  async function handleDeleteMatchday(md: MatchdayFromApi) {
+    const count = matches.filter((m) => m.matchdayId === md.id).length
+    const msg = count > 0
+      ? `Esta jornada tiene ${count} partido(s). ¿Eliminar la jornada y sus partidos?`
+      : '¿Eliminar esta jornada?'
+    if (!confirm(msg)) return
+    await run('del-md', async () => {
+      await deleteMatchday(md.id)
+      await reload()
+      if (activeMatchdayId === md.id) setActiveMatchdayId(null)
+    })
   }
 
   if (loading) {
@@ -210,6 +257,13 @@ export function PartidosManager({
         <span className="text-slate-300">/</span>
         <span className="text-sm font-semibold text-slate-900">Partidos</span>
         <div className="flex-1" />
+
+        <button
+          onClick={() => setCreatingMatchday(true)}
+          className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold border border-slate-200 text-slate-700 hover:bg-slate-50 transition-all"
+        >
+          <CalendarPlus size={12} /> Nueva jornada
+        </button>
 
         <button
           onClick={() => handleGenerate(matchdays.length > 0)}
@@ -283,10 +337,28 @@ export function PartidosManager({
           {activeMatchday && (
             <div>
               <div className="flex items-center justify-between mb-3">
-                <h2 className="text-base font-bold text-slate-900">{activeMatchday.name}</h2>
-                <span className="text-xs text-slate-500">
-                  {activeMatches.length} {activeMatches.length === 1 ? 'partido' : 'partidos'}
-                </span>
+                <div className="flex items-center gap-2">
+                  <h2 className="text-base font-bold text-slate-900">{activeMatchday.name}</h2>
+                  <span className="text-xs text-slate-500">
+                    · {activeMatches.length} {activeMatches.length === 1 ? 'partido' : 'partidos'}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setAddingMatch(true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-600 text-white text-xs font-bold hover:bg-green-700 transition-colors"
+                  >
+                    <Plus size={12} /> Agregar partido
+                  </button>
+                  <button
+                    onClick={() => handleDeleteMatchday(activeMatchday)}
+                    disabled={busy === 'del-md'}
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-red-200 text-red-600 text-xs font-bold hover:bg-red-50 transition-colors disabled:opacity-50"
+                    title="Eliminar jornada"
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </div>
               </div>
 
               {Array.from(matchesByGroup.entries()).map(([groupId, list]) => {
@@ -330,6 +402,7 @@ export function PartidosManager({
           match={editing}
           venues={venues}
           referees={referees}
+          matchdays={matchdays}
           home={editing.homeTeamId ? teamMap.get(editing.homeTeamId) : undefined}
           away={editing.awayTeamId ? teamMap.get(editing.awayTeamId) : undefined}
           onClose={() => setEditing(null)}
@@ -360,7 +433,210 @@ export function PartidosManager({
           onClose={() => setEventsFor(null)}
         />
       )}
+
+      {creatingMatchday && (
+        <MatchdayDialog
+          nextNumber={(matchdays.reduce((mx, m) => Math.max(mx, m.number), 0)) + 1}
+          onClose={() => setCreatingMatchday(false)}
+          onSubmit={async (dto) => {
+            await handleCreateMatchday(dto)
+            setCreatingMatchday(false)
+          }}
+        />
+      )}
+
+      {addingMatch && activeMatchday && (
+        <AddMatchDialog
+          matchdayId={activeMatchday.id}
+          matchdayName={activeMatchday.name ?? `Jornada ${activeMatchday.number}`}
+          registrations={registrations}
+          groups={groups}
+          venues={venues}
+          referees={referees}
+          onClose={() => setAddingMatch(false)}
+          onSubmit={async (dto) => {
+            await handleAddMatch(dto)
+            setAddingMatch(false)
+          }}
+        />
+      )}
     </div>
+  )
+}
+
+// ─── Nueva jornada ───────────────────────────────────────────────────────────
+
+function MatchdayDialog({
+  nextNumber, onClose, onSubmit,
+}: {
+  nextNumber: number
+  onClose: () => void
+  onSubmit: (dto: { number: number; name: string; scheduledDate?: string }) => Promise<void>
+}) {
+  const [number, setNumber] = useState(String(nextNumber))
+  const [name, setName] = useState(`Fecha ${nextNumber}`)
+  const [scheduledDate, setScheduledDate] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault()
+    setSubmitting(true)
+    setError(null)
+    try {
+      await onSubmit({
+        number: parseInt(number) || nextNumber,
+        name: name.trim() || `Fecha ${number}`,
+        scheduledDate: scheduledDate ? new Date(scheduledDate).toISOString() : undefined,
+      })
+    } catch (err) {
+      setError(extractError(err) ?? 'No se pudo crear la jornada.')
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <>
+      <div className="fixed inset-0 bg-black/30 z-40" onClick={submitting ? undefined : onClose} />
+      <div className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-sm bg-white rounded-2xl shadow-2xl z-50">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
+          <h2 className="text-base font-bold text-slate-900">Nueva jornada</h2>
+          <button onClick={onClose} disabled={submitting} className="text-slate-400 hover:text-slate-700 disabled:opacity-50">
+            <X size={18} />
+          </button>
+        </div>
+        <form onSubmit={submit} className="px-5 py-4 space-y-4">
+          <div className="grid grid-cols-3 gap-3">
+            <Field label="N°">
+              <input type="number" min={1} className={inputCls} value={number} onChange={(e) => setNumber(e.target.value)} />
+            </Field>
+            <div className="col-span-2">
+              <Field label="Nombre">
+                <input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} />
+              </Field>
+            </div>
+          </div>
+          <Field label="Fecha (opcional)">
+            <input type="datetime-local" className={inputCls} value={scheduledDate} onChange={(e) => setScheduledDate(e.target.value)} />
+          </Field>
+          {error && <p className="text-xs text-red-600">{error}</p>}
+          <div className="flex justify-end gap-2 pt-2">
+            <button type="button" onClick={onClose} disabled={submitting} className="px-3 py-2 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-50 disabled:opacity-50">Cancelar</button>
+            <button type="submit" disabled={submitting} className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-green-600 text-white text-xs font-bold hover:bg-green-700 disabled:opacity-50">
+              {submitting ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />} Crear
+            </button>
+          </div>
+        </form>
+      </div>
+    </>
+  )
+}
+
+// ─── Agregar partido ─────────────────────────────────────────────────────────
+
+function AddMatchDialog({
+  matchdayId, matchdayName, registrations, groups, venues, referees, onClose, onSubmit,
+}: {
+  matchdayId: string
+  matchdayName: string
+  registrations: RegistrationFromApi[]
+  groups: GroupFromApi[]
+  venues: VenueFromApi[]
+  referees: RefereeFromApi[]
+  onClose: () => void
+  onSubmit: (dto: Parameters<typeof createMatch>[0]) => Promise<void>
+}) {
+  const [homeTeamId, setHomeTeamId] = useState('')
+  const [awayTeamId, setAwayTeamId] = useState('')
+  const [groupId, setGroupId] = useState('')
+  const [venueId, setVenueId] = useState('')
+  const [refereeId, setRefereeId] = useState('')
+  const [scheduledAt, setScheduledAt] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const teams = useMemo(
+    () => [...registrations].sort((a, b) => a.team.name.localeCompare(b.team.name)),
+    [registrations],
+  )
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault()
+    if (!homeTeamId || !awayTeamId) { setError('Selecciona local y visitante.'); return }
+    if (homeTeamId === awayTeamId) { setError('El local y el visitante deben ser distintos.'); return }
+    setSubmitting(true)
+    setError(null)
+    try {
+      await onSubmit({
+        matchdayId,
+        homeTeamId,
+        awayTeamId,
+        groupId: groupId || undefined,
+        venueId: venueId || undefined,
+        refereeId: refereeId || undefined,
+        scheduledAt: scheduledAt ? new Date(scheduledAt).toISOString() : undefined,
+        round: matchdayName,
+      })
+    } catch (err) {
+      setError(extractError(err) ?? 'No se pudo crear el partido.')
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <>
+      <div className="fixed inset-0 bg-black/30 z-40" onClick={submitting ? undefined : onClose} />
+      <aside className="fixed right-0 top-0 h-full w-full max-w-md bg-white shadow-2xl z-50 flex flex-col">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
+          <h2 className="text-base font-bold text-slate-900">Agregar partido · {matchdayName}</h2>
+          <button onClick={onClose} disabled={submitting} className="text-slate-400 hover:text-slate-700 disabled:opacity-50">
+            <X size={18} />
+          </button>
+        </div>
+        <form onSubmit={submit} className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+          <Field label="Local">
+            <select className={inputCls} value={homeTeamId} onChange={(e) => setHomeTeamId(e.target.value)}>
+              <option value="">— Selecciona —</option>
+              {teams.map((r) => <option key={r.teamId} value={r.teamId}>{r.team.name}</option>)}
+            </select>
+          </Field>
+          <Field label="Visitante">
+            <select className={inputCls} value={awayTeamId} onChange={(e) => setAwayTeamId(e.target.value)}>
+              <option value="">— Selecciona —</option>
+              {teams.map((r) => <option key={r.teamId} value={r.teamId}>{r.team.name}</option>)}
+            </select>
+          </Field>
+          <Field label="Grupo (opcional)">
+            <select className={inputCls} value={groupId} onChange={(e) => setGroupId(e.target.value)}>
+              <option value="">— Sin grupo —</option>
+              {groups.map((g) => <option key={g.id} value={g.id}>{g.code} · {g.name}</option>)}
+            </select>
+          </Field>
+          <Field label="Cancha">
+            <select className={inputCls} value={venueId} onChange={(e) => setVenueId(e.target.value)}>
+              <option value="">— Sin asignar —</option>
+              {venues.map((v) => <option key={v.id} value={v.id}>{v.name}{v.pitchCount > 1 ? ` (${v.pitchCount} canchas)` : ''}</option>)}
+            </select>
+          </Field>
+          <Field label="Árbitro">
+            <select className={inputCls} value={refereeId} onChange={(e) => setRefereeId(e.target.value)}>
+              <option value="">— Sin asignar —</option>
+              {referees.map((r) => <option key={r.id} value={r.id}>{r.fullName}</option>)}
+            </select>
+          </Field>
+          <Field label="Fecha y hora">
+            <input type="datetime-local" className={inputCls} value={scheduledAt} onChange={(e) => setScheduledAt(e.target.value)} />
+          </Field>
+          {error && <p className="text-xs text-red-600">{error}</p>}
+        </form>
+        <div className="px-5 py-4 border-t border-slate-200 flex justify-end gap-2">
+          <button type="button" onClick={onClose} disabled={submitting} className="px-3 py-2 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-50 disabled:opacity-50">Cancelar</button>
+          <button onClick={submit} disabled={submitting} className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-green-600 text-white text-xs font-bold hover:bg-green-700 disabled:opacity-50">
+            {submitting ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />} Agregar
+          </button>
+        </div>
+      </aside>
+    </>
   )
 }
 
@@ -381,6 +657,12 @@ function MatchCard({
 }) {
   const status = STATUS_STYLE[match.status]
   const isFinished = match.status === 'finished'
+  // Un partido con historial no se borra: se cancela o se aplaza desde el panel
+  // de programación, para no perder goles, tarjetas ni cambios.
+  const canDelete =
+    !['finished', 'live', 'walkover'].includes(match.status) &&
+    match.homeScore == null &&
+    match.awayScore == null
 
   return (
     <div className="bg-white rounded-xl border border-slate-200 hover:border-slate-300 transition-colors overflow-hidden">
@@ -480,13 +762,15 @@ function MatchCard({
         >
           <Pencil size={12} />
         </button>
-        <button
-          onClick={onDelete}
-          className="p-1 rounded text-slate-400 hover:bg-red-50 hover:text-red-600 transition-colors"
-          title="Eliminar"
-        >
-          <Trash2 size={12} />
-        </button>
+        {canDelete && (
+          <button
+            onClick={onDelete}
+            className="p-1 rounded text-slate-400 hover:bg-red-50 hover:text-red-600 transition-colors"
+            title="Eliminar"
+          >
+            <Trash2 size={12} />
+          </button>
+        )}
       </div>
     </div>
   )
@@ -515,11 +799,12 @@ function TeamBadge({ team }: { team?: RegistrationFromApi['team'] }) {
 // ─── Schedule dialog ─────────────────────────────────────────────────────────
 
 function ScheduleDialog({
-  match, venues, referees, home, away, onClose, onSubmit,
+  match, venues, referees, matchdays, home, away, onClose, onSubmit,
 }: {
   match: MatchFromApi
   venues: VenueFromApi[]
   referees: RefereeFromApi[]
+  matchdays: MatchdayFromApi[]
   home?: RegistrationFromApi['team']
   away?: RegistrationFromApi['team']
   onClose: () => void
@@ -531,6 +816,7 @@ function ScheduleDialog({
   const [venueId, setVenueId] = useState(match.venueId ?? '')
   const [refereeId, setRefereeId] = useState(match.refereeId ?? '')
   const [status, setStatus] = useState<MatchStatus>(match.status)
+  const [matchdayId, setMatchdayId] = useState(match.matchdayId)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -544,6 +830,8 @@ function ScheduleDialog({
         venueId: venueId || undefined,
         refereeId: refereeId || undefined,
         status,
+        // Solo se manda si cambió: la API valida cruces de equipo en el destino.
+        ...(matchdayId !== match.matchdayId && { matchdayId }),
       })
     } catch (err) {
       setError(extractError(err) ?? 'No se pudo guardar.')
@@ -573,6 +861,21 @@ function ScheduleDialog({
         <form onSubmit={submit} className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
           <Field label="Fecha y hora">
             <input type="datetime-local" className={inputCls} value={scheduledAt} onChange={(e) => setScheduledAt(e.target.value)} />
+          </Field>
+
+          <Field label="Jornada">
+            <select className={inputCls} value={matchdayId} onChange={(e) => setMatchdayId(e.target.value)}>
+              {matchdays.map((md) => (
+                <option key={md.id} value={md.id}>
+                  {md.name ?? `Jornada ${md.number}`}
+                </option>
+              ))}
+            </select>
+            {matchdayId !== match.matchdayId && (
+              <p className="mt-1 text-[11px] text-slate-500">
+                Se conservan los goles, tarjetas y cambios: cuelgan del partido, no de la jornada.
+              </p>
+            )}
           </Field>
 
           <Field label="Cancha">
@@ -634,12 +937,18 @@ function FinalizeDialog({
   home?: RegistrationFromApi['team']
   away?: RegistrationFromApi['team']
   onClose: () => void
-  onSubmit: (dto: { homeScore: number; awayScore: number }) => Promise<void>
+  onSubmit: (dto: { homeScore: number; awayScore: number; homePenalties?: number; awayPenalties?: number }) => Promise<void>
 }) {
   const [homeScore, setHomeScore] = useState(match.homeScore?.toString() ?? '0')
   const [awayScore, setAwayScore] = useState(match.awayScore?.toString() ?? '0')
+  const [homePens, setHomePens] = useState(match.homePenalties?.toString() ?? '')
+  const [awayPens, setAwayPens] = useState(match.awayPenalties?.toString() ?? '')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // En eliminatoria un empate no define: sin penales el cuadro no avanza.
+  const empate = homeScore !== '' && homeScore === awayScore
+  const esLlave = !!match.round && !/^Fecha|^Jornada/i.test(match.round)
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
@@ -649,10 +958,23 @@ function FinalizeDialog({
       setError('Marcador inválido.')
       return
     }
+    const hp = parseInt(homePens)
+    const ap = parseInt(awayPens)
+    const conPenales = Number.isFinite(hp) && Number.isFinite(ap)
+
+    if (empate && esLlave && !conPenales) {
+      setError('Es un partido de eliminatoria y quedó empatado. Carga los penales para definir quién avanza.')
+      return
+    }
+    if (conPenales && hp === ap) {
+      setError('Los penales no pueden quedar empatados.')
+      return
+    }
+
     setSubmitting(true)
     setError(null)
     try {
-      await onSubmit({ homeScore: hs, awayScore: as })
+      await onSubmit({ homeScore: hs, awayScore: as, ...(conPenales && { homePenalties: hp, awayPenalties: ap }) })
     } catch (err) {
       setError(extractError(err) ?? 'No se pudo guardar.')
       setSubmitting(false)
@@ -690,6 +1012,29 @@ function FinalizeDialog({
                 />
               </div>
             </div>
+            {empate && esLlave && (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-3">
+                <p className="text-xs font-semibold text-amber-800">Definición por penales</p>
+                <p className="mt-0.5 text-[11px] text-amber-700">
+                  {match.round} quedó empatado. Sin penales el ganador no pasa a la siguiente ronda.
+                </p>
+                <div className="mt-3 grid grid-cols-[1fr_auto_1fr] items-center gap-3">
+                  <input
+                    type="number" min={0} placeholder="0"
+                    className="w-full text-center text-lg font-bold rounded-lg border border-amber-300 bg-white px-3 py-2 outline-none focus:border-amber-500"
+                    value={homePens}
+                    onChange={(e) => setHomePens(e.target.value)}
+                  />
+                  <span className="text-sm font-bold text-amber-400">-</span>
+                  <input
+                    type="number" min={0} placeholder="0"
+                    className="w-full text-center text-lg font-bold rounded-lg border border-amber-300 bg-white px-3 py-2 outline-none focus:border-amber-500"
+                    value={awayPens}
+                    onChange={(e) => setAwayPens(e.target.value)}
+                  />
+                </div>
+              </div>
+            )}
             {error && (
               <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-600">
                 <AlertCircle size={12} /> {error}

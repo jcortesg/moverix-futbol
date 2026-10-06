@@ -17,6 +17,7 @@ import {
   X,
   MapPin,
   UserCheck,
+  UserSearch,
   Building2,
   ChevronDown,
   Check,
@@ -41,6 +42,7 @@ const GENERAL_LINKS = [
   { href: '/torneos', label: 'Torneos', icon: Trophy },
   { href: '/canchas', label: 'Canchas', icon: MapPin },
   { href: '/arbitros', label: 'Árbitros', icon: UserCheck },
+  { href: '/jugadores', label: 'Jugadores', icon: UserSearch },
   { href: '/reportes', label: 'Reportes', icon: FileText },
   { href: '/config', label: 'Config', icon: Settings },
 ]

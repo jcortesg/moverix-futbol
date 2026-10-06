@@ -11,13 +11,16 @@ import {
   deleteReferee,
   type RefereeFromApi,
 } from '@/lib/referees'
+import { getMyOrganizations } from '@/lib/leagues'
 import { useActiveOrganization } from '@/contexts/ActiveOrganizationContext'
 import { Field, inputCls } from '@/components/ui/form'
 
 type Mode = { kind: 'create' } | { kind: 'edit'; referee: RefereeFromApi }
 
 export function RefereesManager() {
-  const { activeOrg } = useActiveOrganization()
+  // `ready` evita el falso "no hay organización" mientras se lee de
+  // localStorage; `organizations` sirve de respaldo si nunca se eligió una.
+  const { activeOrg, organizations, setActiveOrg, ready } = useActiveOrganization()
   const [referees, setReferees] = useState<RefereeFromApi[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -29,11 +32,36 @@ export function RefereesManager() {
   }
 
   useEffect(() => {
-    if (!activeOrg) { setError('No hay organización configurada.'); setLoading(false); return }
+    if (!ready) return
+
+    // Sin organización activa: si el usuario pertenece a alguna, se toma la
+    // primera en vez de dejar la pantalla en un error sin salida.
+    if (!activeOrg) {
+      if (organizations.length > 0) {
+        setActiveOrg(organizations[0])
+        return
+      }
+      getMyOrganizations()
+        .then((orgs) => {
+          if (orgs.length > 0) {
+            setActiveOrg(orgs[0])
+          } else {
+            setError('Aún no tienes una organización. Créala para registrar árbitros y delegados.')
+            setLoading(false)
+          }
+        })
+        .catch(() => {
+          setError('No se pudo cargar tu organización.')
+          setLoading(false)
+        })
+      return
+    }
+
+    setLoading(true)
     reload(activeOrg.id)
       .catch(() => setError('No se pudieron cargar los árbitros.'))
       .finally(() => setLoading(false))
-  }, [activeOrg?.id])
+  }, [ready, activeOrg?.id, organizations.length])
 
   async function handleDelete(id: string) {
     if (!confirm('¿Eliminar este árbitro? Los partidos pasados no se modifican.')) return
@@ -189,6 +217,10 @@ function RefereeDrawer({
   const [fullName, setFullName] = useState(editing?.fullName ?? '')
   const [phone, setPhone] = useState(editing?.phone ?? '')
   const [licenseNumber, setLicenseNumber] = useState(editing?.licenseNumber ?? '')
+  const [email, setEmail] = useState(editing?.email ?? '')
+  const [role, setRole] = useState<'referee' | 'delegate' | 'both'>(
+    (editing?.role as 'referee' | 'delegate' | 'both') ?? 'referee',
+  )
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -202,6 +234,8 @@ function RefereeDrawer({
         fullName: fullName.trim(),
         phone: phone.trim() || undefined,
         licenseNumber: licenseNumber.trim() || undefined,
+        email: email.trim().toLowerCase() || undefined,
+        role,
       }
       if (editing) await updateReferee(editing.id, payload)
       else await createReferee({ organizationId: orgId, ...payload })
@@ -218,7 +252,7 @@ function RefereeDrawer({
       <aside className="fixed right-0 top-0 h-full w-full max-w-md bg-white shadow-2xl z-50 flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
           <h2 className="text-base font-bold text-slate-900">
-            {editing ? 'Editar árbitro' : 'Nuevo árbitro'}
+            {editing ? 'Editar persona' : 'Nuevo árbitro o delegado'}
           </h2>
           <button onClick={onClose} disabled={submitting} className="text-slate-400 hover:text-slate-700 transition-colors disabled:opacity-50">
             <X size={18} />
@@ -229,6 +263,51 @@ function RefereeDrawer({
           <Field label="Nombre completo">
             <input autoFocus className={inputCls} value={fullName} onChange={(e) => setFullName(e.target.value)} placeholder="Carlos Pérez Gómez" />
           </Field>
+          <Field label="Puede ser asignado como">
+            <div className="grid grid-cols-3 gap-1.5">
+              {([
+                { v: 'referee', l: 'Árbitro' },
+                { v: 'delegate', l: 'Delegado' },
+                { v: 'both', l: 'Ambos' },
+              ] as const).map((o) => (
+                <button
+                  key={o.v}
+                  type="button"
+                  onClick={() => setRole(o.v)}
+                  className={
+                    'rounded-lg border px-2 py-2 text-xs font-bold transition-colors ' +
+                    (role === o.v
+                      ? 'border-green-500 bg-green-50 text-green-700'
+                      : 'border-slate-200 text-slate-500 hover:border-slate-300')
+                  }
+                >
+                  {o.l}
+                </button>
+              ))}
+            </div>
+          </Field>
+
+          <Field
+            label="Correo"
+            hint={role === 'referee'
+              ? 'Opcional'
+              : 'Necesario para que pueda entrar a dirigir partidos'}
+          >
+            <input
+              type="email"
+              className={inputCls}
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="delegado@correo.com"
+            />
+            {role !== 'referee' && (
+              <p className="mt-1 text-[11px] text-slate-500">
+                Con este correo se vincula su cuenta. Si aún no se ha registrado, la
+                asignación queda pendiente y se activa sola cuando lo haga.
+              </p>
+            )}
+          </Field>
+
           <Field label="N° de licencia" hint="Opcional">
             <input className={inputCls} value={licenseNumber} onChange={(e) => setLicenseNumber(e.target.value)} placeholder="ABC-12345" />
           </Field>

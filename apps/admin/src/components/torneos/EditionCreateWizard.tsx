@@ -41,7 +41,7 @@ export function EditionCreateWizard({ leagueId }: { leagueId: string }) {
   const [startDate, setStartDate] = useState('')
   const [endDate, setEndDate] = useState('')
   const [maxTeams, setMaxTeams] = useState('16')
-  const [formatConfig, setFormatConfig] = useState<FormatConfig>({})
+  const [formatConfig, setFormatConfig] = useState<FormatConfig>({ phases: [] })
 
   const season = seasonCodeFromDate(startDate)
 
@@ -58,10 +58,10 @@ export function EditionCreateWizard({ leagueId }: { leagueId: string }) {
       if (!n || n < 2) return 'Mínimo 2 equipos.'
     }
     if (currentStep.key === 'format') {
-      if (!formatConfig.type) return 'Selecciona un formato.'
+      if (!formatConfig.phases?.length) return 'Agrega al menos una fase.'
     }
     return null
-  }, [currentStep.key, name, startDate, endDate, maxTeams, formatConfig.type])
+  }, [currentStep.key, name, startDate, endDate, maxTeams, formatConfig.phases])
 
   function goNext() {
     if (stepError) { setError(stepError); return }
@@ -231,19 +231,17 @@ export function EditionCreateWizard({ leagueId }: { leagueId: string }) {
               <SummaryRow label="Inicio" value={startDate || '—'} />
               <SummaryRow label="Fin estimado" value={endDate || '—'} />
               <SummaryRow label="Máximo de equipos" value={maxTeams} />
-              <SummaryRow label="Formato" value={selectedTemplate ? `${selectedTemplate.icon} ${selectedTemplate.label}` : '—'} />
-              {formatConfig.phase1 && 'groupCount' in formatConfig.phase1 && (
-                <SummaryRow
-                  label="Fase de grupos"
-                  value={`${formatConfig.phase1.groupCount} grupos × ${formatConfig.phase1.teamsPerGroup} eq. (clasifican ${formatConfig.phase1.qualifiersPerGroup})`}
-                />
-              )}
-              {formatConfig.phase2 && 'bracketSize' in formatConfig.phase2 && (
-                <SummaryRow label="Bracket" value={`${formatConfig.phase2.bracketSize} equipos`} />
-              )}
-              {formatConfig.phase2 && 'cups' in formatConfig.phase2 && (
-                <SummaryRow label="Copas" value={`${formatConfig.phase2.cups.length} copas`} />
-              )}
+              <SummaryRow label="Formato" value={selectedTemplate ? `${selectedTemplate.icon} ${selectedTemplate.label}` : formatConfig.phases?.length ? `${formatConfig.phases.length} fases` : '—'} />
+              {formatConfig.phases?.map((phase, i) => {
+                if (phase.kind === 'groups') {
+                  const p = phase as { groupCount: number; teamsPerGroup: number; qualifiersPerGroup: number }
+                  return <SummaryRow key={i} label={`Fase ${i + 1} — Grupos`} value={`${p.groupCount} grupos × ${p.teamsPerGroup} eq. (clasifican ${p.qualifiersPerGroup})`} />
+                }
+                if (phase.kind === 'round_robin') return <SummaryRow key={i} label={`Fase ${i + 1} — Todos vs Todos`} value="Liga" />
+                if (phase.kind === 'knockout') return <SummaryRow key={i} label={`Fase ${i + 1} — Eliminatoria`} value={`Bracket de ${(phase as { bracketSize: number }).bracketSize}`} />
+                if (phase.kind === 'multi_cup') return <SummaryRow key={i} label={`Fase ${i + 1} — Multi-Copa`} value={`${(phase as { cups: unknown[] }).cups.length} copas`} />
+                return null
+              })}
               {formatConfig.minutesPerHalf ? (
                 <SummaryRow label="Duración del partido" value={`${formatConfig.minutesPerHalf * 2} min (2 × ${formatConfig.minutesPerHalf})`} />
               ) : null}

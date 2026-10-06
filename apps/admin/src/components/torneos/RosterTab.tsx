@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import {
-  Loader2, AlertCircle, Plus, Users, Crown, Trash2, Pencil, Upload,
+  Loader2, AlertCircle, Plus, Users, Crown, Trash2, Pencil, Upload, ShieldCheck, Download, RotateCcw, CheckCircle2,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import {
@@ -10,23 +10,64 @@ import {
   addRosterPlayer,
   updateRosterPlayer,
   removeRosterPlayer,
+  restoreRosterPlayer,
+  addDirectorAsPlayer,
   PLAYER_POSITION_LABEL,
   type RegistrationPlayerFromApi,
 } from '@/lib/registration-players'
+import { ROSTER_PLAYER_FIELDS } from '@/lib/leagues'
 import { getPlayerStatsByTeam, type PlayerStatFromApi } from '@/lib/player-stats'
 import { RosterImportDialog } from './RosterImportDialog'
 import {
   PlayerDetailDrawer,
   type PlayerFormValues,
 } from './PlayerDetailDrawer'
+import { downloadRosterPdf } from '@/lib/roster-pdf'
+import { downloadRosterExcel } from '@/lib/roster-excel'
 
 type Props = {
   registrationId: string
   editionId?: string
   teamId?: string
+  editionName?: string
+  teamName?: string
+  teamLogoUrl?: string | null
+  groupName?: string | null
+  city?: string | null
+  /** Campos que la edición exige a cada jugador (editions.requiredPlayerFields). */
+  requiredPlayerFields?: string[]
 }
 
-export function RosterTab({ registrationId, editionId, teamId }: Props) {
+/**
+ * Qué le falta a un jugador según los campos que exige la edición.
+ * Mismo criterio que el backend: vacío, null o cadena en blanco = falta.
+ */
+function missingFields(
+  p: RegistrationPlayerFromApi,
+  required: string[],
+): string[] {
+  const value: Record<string, unknown> = {
+    firstName: p.firstName, lastName: p.lastName, docNumber: p.docNumber,
+    birthDate: p.birthDate, phone: p.phone, email: p.email,
+    employer: p.employer, healthProvider: p.healthProvider,
+    jerseyNumber: p.jerseyNumber, position: p.position,
+    photoFileUrl: p.photoFileUrl, docFileUrl: p.docFileUrl,
+    emergencyContactName: p.emergencyContactName,
+    emergencyContactPhone: p.emergencyContactPhone,
+  }
+  return required
+    .filter((k) => {
+      const v = value[k]
+      return v === null || v === undefined || (typeof v === 'string' && !v.trim())
+    })
+    .map((k) => ROSTER_PLAYER_FIELDS.find((f) => f.key === k)?.label ?? k)
+}
+
+export function RosterTab({
+  registrationId, editionId, teamId,
+  editionName, teamName, teamLogoUrl, groupName, city,
+  requiredPlayerFields = [],
+}: Props) {
   const [players, setPlayers] = useState<RegistrationPlayerFromApi[]>([])
   const [stats, setStats] = useState<Map<string, PlayerStatFromApi>>(new Map())
   const [loading, setLoading] = useState(true)
@@ -34,6 +75,44 @@ export function RosterTab({ registrationId, editionId, teamId }: Props) {
   const [editing, setEditing] = useState<RegistrationPlayerFromApi | null>(null)
   const [creating, setCreating] = useState(false)
   const [importing, setImporting] = useState(false)
+  const [addingDirector, setAddingDirector] = useState(false)
+  const [downloadingPdf, setDownloadingPdf] = useState(false)
+
+  async function handleDownloadPdf() {
+    // La planilla es el documento oficial del partido: los dados de baja no van.
+    const activos = players.filter((p) => !p.removedAt)
+    if (activos.length === 0) return
+    setDownloadingPdf(true)
+    try {
+      await downloadRosterPdf({
+        editionName: editionName ?? 'Torneo',
+        teamName: teamName ?? 'Equipo',
+        teamLogoUrl,
+        groupName,
+        city,
+        players: activos,
+      })
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo generar el PDF')
+    } finally {
+      setDownloadingPdf(false)
+    }
+  }
+
+  function handleDownloadExcel() {
+    const activos = players.filter((p) => !p.removedAt)
+    if (activos.length === 0) return
+    try {
+      downloadRosterExcel({
+        editionName: editionName ?? 'Torneo',
+        teamName: teamName ?? 'Equipo',
+        groupName,
+        players: activos,
+      })
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo generar el Excel')
+    }
+  }
 
   useEffect(() => {
     const promises: Promise<void>[] = [
@@ -73,6 +152,8 @@ export function RosterTab({ registrationId, editionId, teamId }: Props) {
       jerseyNumber: values.jerseyNumber ? parseInt(values.jerseyNumber) : undefined,
       position: values.position || undefined,
       isCaptain: values.isCaptain,
+      emergencyContactName: values.emergencyContactName.trim() || undefined,
+      emergencyContactPhone: values.emergencyContactPhone.trim() || undefined,
     })
     // Enforce single captain
     if (row.isCaptain) {
@@ -101,6 +182,8 @@ export function RosterTab({ registrationId, editionId, teamId }: Props) {
       jerseyNumber: values.jerseyNumber ? parseInt(values.jerseyNumber) : undefined,
       position: values.position || undefined,
       isCaptain: values.isCaptain,
+      emergencyContactName: values.emergencyContactName.trim() || undefined,
+      emergencyContactPhone: values.emergencyContactPhone.trim() || undefined,
     })
     // Enforce single captain when toggled on
     if (values.isCaptain && !editing?.isCaptain) {
@@ -116,9 +199,32 @@ export function RosterTab({ registrationId, editionId, teamId }: Props) {
   }
 
   async function handleRemove(id: string) {
-    if (!confirm('¿Quitar jugador de la plantilla?')) return
+    if (!confirm('¿Dar de baja al jugador? Conserva sus datos y sus goles, y puedes reactivarlo.')) return
     await removeRosterPlayer(id)
-    setPlayers((prev) => prev.filter((p) => p.id !== id))
+    // Baja lógica: la fila no desaparece, pasa a la sección "Dados de baja".
+    setPlayers((prev) =>
+      prev.map((p) => (p.id === id ? { ...p, removedAt: new Date().toISOString() } : p)),
+    )
+  }
+
+  async function handleRestore(id: string) {
+    const updated = await restoreRosterPlayer(id)
+    setPlayers((prev) => prev.map((p) => (p.id === id ? updated : p)).sort(sortPlayers))
+  }
+
+  async function handleAddDirector() {
+    setAddingDirector(true)
+    setError(null)
+    try {
+      const row = await addDirectorAsPlayer(registrationId)
+      setPlayers((prev) =>
+        prev.some((p) => p.id === row.id) ? prev : [...prev, row].sort(sortPlayers),
+      )
+    } catch {
+      setError('No se pudo agregar al delegado a la plantilla.')
+    } finally {
+      setAddingDirector(false)
+    }
   }
 
   async function toggleCaptain(row: RegistrationPlayerFromApi) {
@@ -162,6 +268,30 @@ export function RosterTab({ registrationId, editionId, teamId }: Props) {
         </div>
         <div className="flex items-center gap-2">
           <button
+            onClick={handleDownloadPdf}
+            disabled={downloadingPdf || players.length === 0}
+            className="flex items-center gap-2 px-3 py-1.5 bg-white text-slate-700 text-xs font-bold rounded-xl border border-slate-200 hover:bg-slate-50 transition-all disabled:opacity-50"
+            title="Descargar la planilla en PDF"
+          >
+            {downloadingPdf ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />} Planilla PDF
+          </button>
+          <button
+            onClick={handleDownloadExcel}
+            disabled={players.length === 0}
+            className="flex items-center gap-2 px-3 py-1.5 bg-white text-slate-700 text-xs font-bold rounded-xl border border-slate-200 hover:bg-slate-50 transition-all disabled:opacity-50"
+            title="Descargar la planilla en Excel"
+          >
+            <Download size={12} /> Planilla Excel
+          </button>
+          <button
+            onClick={handleAddDirector}
+            disabled={addingDirector}
+            className="flex items-center gap-2 px-3 py-1.5 bg-white text-slate-700 text-xs font-bold rounded-xl border border-slate-200 hover:bg-slate-50 transition-all disabled:opacity-50"
+            title="Agrega al delegado del equipo como jugador"
+          >
+            {addingDirector ? <Loader2 size={12} className="animate-spin" /> : <ShieldCheck size={12} />} Delegado
+          </button>
+          <button
             onClick={() => setImporting(true)}
             className="flex items-center gap-2 px-3 py-1.5 bg-white text-slate-700 text-xs font-bold rounded-xl border border-slate-200 hover:bg-slate-50 transition-all"
           >
@@ -204,22 +334,44 @@ export function RosterTab({ registrationId, editionId, teamId }: Props) {
                 </th>
                 <th className="text-center text-[10px] font-bold text-slate-500 uppercase tracking-widest px-4 py-3 w-16" title="Walkovers / No presentados">WO</th>
                 <th className="text-center text-[10px] font-bold text-slate-500 uppercase tracking-widest px-4 py-3 w-20">Multas</th>
+                <th className="text-left text-[10px] font-bold text-slate-500 uppercase tracking-widest px-4 py-3 w-32">Datos</th>
                 <th className="text-left text-[10px] font-bold text-slate-500 uppercase tracking-widest px-4 py-3 w-28">Estado</th>
                 <th className="text-center text-[10px] font-bold text-slate-500 uppercase tracking-widest px-4 py-3 w-16">Cap.</th>
                 <th className="text-right text-[10px] font-bold text-slate-500 uppercase tracking-widest px-4 py-3 w-24">Acciones</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {players.map((p) => (
+              {players.filter((p) => !p.removedAt).map((p) => (
                 <PlayerRow
                   key={p.id}
                   player={p}
                   playerStats={stats.get(p.playerUid)}
+                  missing={missingFields(p, requiredPlayerFields)}
                   onEdit={() => setEditing(p)}
                   onRemove={() => handleRemove(p.id)}
                   onToggleCaptain={() => toggleCaptain(p)}
                 />
               ))}
+              {players.some((p) => p.removedAt) && (
+                <>
+                  <tr className="bg-slate-50">
+                    <td colSpan={11} className="px-4 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                      Dados de baja · no cuentan para el mínimo ni pueden recibir nuevos goles
+                    </td>
+                  </tr>
+                  {players.filter((p) => p.removedAt).map((p) => (
+                    <PlayerRow
+                      key={p.id}
+                      player={p}
+                      playerStats={stats.get(p.playerUid)}
+                      missing={missingFields(p, requiredPlayerFields)}
+                      onEdit={() => setEditing(p)}
+                      onRemove={() => handleRestore(p.id)}
+                      onToggleCaptain={() => toggleCaptain(p)}
+                    />
+                  ))}
+                </>
+              )}
             </tbody>
           </table>
         </div>
@@ -254,10 +406,12 @@ export function RosterTab({ registrationId, editionId, teamId }: Props) {
 // ─── Row ─────────────────────────────────────────────────────────────────────
 
 function PlayerRow({
-  player, playerStats, onEdit, onRemove, onToggleCaptain,
+  player, playerStats, missing = [], onEdit, onRemove, onToggleCaptain,
 }: {
   player: RegistrationPlayerFromApi
   playerStats?: PlayerStatFromApi
+  /** Campos obligatorios que le faltan a este jugador. */
+  missing?: string[]
   onEdit: () => void
   onRemove: () => Promise<void>
   onToggleCaptain: () => Promise<void>
@@ -278,7 +432,10 @@ function PlayerRow({
     : { label: 'Activo', bg: 'bg-green-50 border-green-200', text: 'text-green-700', dot: 'bg-green-500' }
 
   return (
-    <tr className="hover:bg-slate-50/50 transition-colors">
+    <tr className={clsx(
+      'hover:bg-slate-50/50 transition-colors',
+      player.removedAt && 'opacity-60 bg-slate-50/40',
+    )}>
       {/* # */}
       <td className="px-4 py-3">
         {player.jerseyNumber != null ? (
@@ -365,6 +522,23 @@ function PlayerRow({
         </button>
       </td>
 
+      {/* Datos: completo o qué le falta */}
+      <td className="px-4 py-3">
+        {missing.length === 0 ? (
+          <span className="inline-flex items-center gap-1 text-[11px] font-bold text-green-700">
+            <CheckCircle2 size={13} /> Completo
+          </span>
+        ) : (
+          <span
+            className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-700 cursor-help"
+            title={`Falta: ${missing.join(', ')}`}
+          >
+            <AlertCircle size={13} />
+            {missing.length === 1 ? missing[0] : `Faltan ${missing.length}`}
+          </span>
+        )}
+      </td>
+
       {/* Acciones */}
       <td className="px-4 py-3 text-right">
         <div className="inline-flex items-center gap-1">
@@ -376,14 +550,25 @@ function PlayerRow({
           >
             <Pencil size={13} />
           </button>
-          <button
-            onClick={() => run(onRemove)}
-            disabled={busy}
-            className="p-1.5 rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-600 transition-colors disabled:opacity-50"
-            title="Quitar"
-          >
-            <Trash2 size={13} />
-          </button>
+          {player.removedAt ? (
+            <button
+              onClick={() => run(onRemove)}
+              disabled={busy}
+              className="p-1.5 rounded-lg text-slate-400 hover:bg-green-50 hover:text-green-700 transition-colors disabled:opacity-50"
+              title="Reactivar"
+            >
+              <RotateCcw size={13} />
+            </button>
+          ) : (
+            <button
+              onClick={() => run(onRemove)}
+              disabled={busy}
+              className="p-1.5 rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-600 transition-colors disabled:opacity-50"
+              title="Dar de baja"
+            >
+              <Trash2 size={13} />
+            </button>
+          )}
         </div>
       </td>
     </tr>

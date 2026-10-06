@@ -7,7 +7,7 @@ import {
   ChevronLeft, Loader2, Save, Upload, Trophy,
   AlertCircle, CheckCircle2, Calendar, Users,
   Settings2, DollarSign, FileText,
-  ArrowUp, ArrowDown, Scale, Globe, Copy, ExternalLink,
+  ArrowUp, ArrowDown, Scale, Globe, Copy, ExternalLink, Code2, RefreshCw,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import {
@@ -15,11 +15,20 @@ import {
   updateEdition,
   uploadEditionLogo,
   uploadEditionBanner,
+  generateEmbedKey,
+  revokeEmbedKey,
+  normalizeFormatConfig,
   DEFAULT_TIEBREAKERS,
   TIEBREAKER_LABEL,
+  PHASE_KIND_LABEL,
+  ROSTER_PLAYER_FIELDS,
+  DEFAULT_REQUIRED_PLAYER_FIELDS,
   type EditionFromApi,
   type EditionStatus,
   type FormatConfig,
+  type PhaseGroups,
+  type PhaseKnockout,
+  type PhaseMultiCup,
   type TiebreakerRules,
   type TiebreakerCriterion,
 } from '@/lib/leagues'
@@ -151,6 +160,31 @@ function HeroEditor({
   )
 }
 
+/**
+ * Arma el objeto de multas para la API. Los campos vacíos se OMITEN (no se
+ * mandan como 0), así el backend cae en su valor por defecto en vez de
+ * interpretar "sin definir" como "multa de $0".
+ */
+function buildFineDefaults(raw: Record<string, string>): Record<string, unknown> | undefined {
+  const out: Record<string, unknown> = {}
+  const nums = [
+    'redCard', 'redCardMatchesBanned', 'yellowCard', 'yellowsForAccumulation',
+    'yellowAccumulation', 'yellowAccumulationMatchesBanned',
+  ]
+  for (const k of nums) {
+    const v = (raw[k] ?? '').trim()
+    if (v === '') continue
+    const n = Number(v)
+    if (Number.isFinite(n) && n >= 0) out[k] = Math.trunc(n)
+  }
+  for (const k of ['redCardSanction', 'yellowAccumulationSanction']) {
+    const v = (raw[k] ?? '').trim()
+    if (v) out[k] = v.slice(0, 160)
+  }
+  // Sin nada configurado se manda undefined: la edición queda con los defaults.
+  return Object.keys(out).length ? out : undefined
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export function EditionEditPage({ editionId }: { editionId: string }) {
@@ -168,14 +202,29 @@ export function EditionEditPage({ editionId }: { editionId: string }) {
   const [startDate, setStartDate] = useState('')
   const [endDate, setEndDate] = useState('')
   const [maxTeams, setMaxTeams] = useState('16')
+  const [minPlayersPerTeam, setMinPlayersPerTeam] = useState('')
+  const [maxPlayersPerTeam, setMaxPlayersPerTeam] = useState('')
+  const [requiredPlayerFields, setRequiredPlayerFields] = useState<string[]>(DEFAULT_REQUIRED_PLAYER_FIELDS)
   const [registrationFee, setRegistrationFee] = useState('0')
   const [prizePool, setPrizePool] = useState('0')
   const [currency, setCurrency] = useState('COP')
   const [rulesUrl, setRulesUrl] = useState('')
+  // Multas por torneo: vacío = usar el valor por defecto del sistema.
+  const [embedKey, setEmbedKey] = useState<string | null>(null)
+  const [embedBusy, setEmbedBusy] = useState(false)
+  const [embedCopied, setEmbedCopied] = useState(false)
+  const [fineRedCard, setFineRedCard] = useState('')
+  const [fineRedBanned, setFineRedBanned] = useState('')
+  const [fineRedSanction, setFineRedSanction] = useState('')
+  const [fineYellowCard, setFineYellowCard] = useState('')
+  const [fineYellowsFor, setFineYellowsFor] = useState('')
+  const [fineYellowAmount, setFineYellowAmount] = useState('')
+  const [fineYellowBanned, setFineYellowBanned] = useState('')
+  const [fineYellowSanction, setFineYellowSanction] = useState('')
   const [isPublished, setIsPublished] = useState(false)
   const [publicDescription, setPublicDescription] = useState('')
   const [copiedUrl, setCopiedUrl] = useState(false)
-  const [formatConfig, setFormatConfig] = useState<FormatConfig>({})
+  const [formatConfig, setFormatConfig] = useState<FormatConfig>({ phases: [] })
   const [tiebreakerRules, setTiebreakerRules] = useState<TiebreakerRules>(DEFAULT_TIEBREAKERS)
 
   useEffect(() => {
@@ -188,13 +237,29 @@ export function EditionEditPage({ editionId }: { editionId: string }) {
         setStartDate(ed.startDate?.slice(0, 10) ?? '')
         setEndDate(ed.endDate?.slice(0, 10) ?? '')
         setMaxTeams(String(ed.maxTeams))
+        setMinPlayersPerTeam(ed.minPlayersPerTeam != null ? String(ed.minPlayersPerTeam) : '')
+        setMaxPlayersPerTeam(ed.maxPlayersPerTeam != null ? String(ed.maxPlayersPerTeam) : '')
+        setRequiredPlayerFields(
+          ed.requiredPlayerFields?.length ? ed.requiredPlayerFields : DEFAULT_REQUIRED_PLAYER_FIELDS,
+        )
         setRegistrationFee(String(ed.registrationFee))
         setPrizePool(String(ed.prizePool))
         setCurrency(ed.currency)
         setRulesUrl(ed.rulesUrl ?? '')
+        setEmbedKey(ed.embedKey ?? null)
+        const fd = (ed.fineDefaults ?? {}) as Record<string, unknown>
+        const asStr = (v: unknown) => (v == null ? '' : String(v))
+        setFineRedCard(asStr(fd.redCard))
+        setFineRedBanned(asStr(fd.redCardMatchesBanned))
+        setFineRedSanction(asStr(fd.redCardSanction))
+        setFineYellowCard(asStr(fd.yellowCard))
+        setFineYellowsFor(asStr(fd.yellowsForAccumulation))
+        setFineYellowAmount(asStr(fd.yellowAccumulation))
+        setFineYellowBanned(asStr(fd.yellowAccumulationMatchesBanned))
+        setFineYellowSanction(asStr(fd.yellowAccumulationSanction))
         setIsPublished(ed.isPublished ?? false)
         setPublicDescription(ed.publicDescription ?? '')
-        setFormatConfig((ed.formatConfig as FormatConfig) ?? {})
+        setFormatConfig(normalizeFormatConfig(ed.formatConfig as Record<string, unknown>))
         setTiebreakerRules((ed.tiebreakerRules as TiebreakerRules) ?? DEFAULT_TIEBREAKERS)
       })
       .catch(() => setError('No se pudo cargar la edición.'))
@@ -217,6 +282,9 @@ export function EditionEditPage({ editionId }: { editionId: string }) {
         startDate: startDate || undefined,
         endDate: endDate || undefined,
         maxTeams: parseInt(maxTeams) || 16,
+        minPlayersPerTeam: minPlayersPerTeam ? parseInt(minPlayersPerTeam) : null,
+        maxPlayersPerTeam: maxPlayersPerTeam ? parseInt(maxPlayersPerTeam) : null,
+        requiredPlayerFields,
         registrationFee: parseInt(registrationFee) || 0,
         prizePool: parseInt(prizePool) || 0,
         currency,
@@ -225,6 +293,16 @@ export function EditionEditPage({ editionId }: { editionId: string }) {
         publicDescription: publicDescription || undefined,
         formatConfig,
         tiebreakerRules,
+        fineDefaults: buildFineDefaults({
+          redCard: fineRedCard,
+          redCardMatchesBanned: fineRedBanned,
+          redCardSanction: fineRedSanction,
+          yellowCard: fineYellowCard,
+          yellowsForAccumulation: fineYellowsFor,
+          yellowAccumulation: fineYellowAmount,
+          yellowAccumulationMatchesBanned: fineYellowBanned,
+          yellowAccumulationSanction: fineYellowSanction,
+        }),
       })
       setEdition(updated)
       setSaved(true)
@@ -415,6 +493,73 @@ export function EditionEditPage({ editionId }: { editionId: string }) {
             </SectionCard>
           )}
 
+          {tab === 'teams' && (
+            <SectionCard
+              icon={Users}
+              color="bg-blue-600"
+              title="Inscripción de jugadores"
+              description="Reglas que debe cumplir la plantilla de cada equipo para enviar su inscripción"
+            >
+              <div className="flex items-end gap-6 mb-6">
+                <div className="max-w-[160px]">
+                  <Field label="Mínimo de jugadores" hint="Vacío = sin mínimo.">
+                    <input
+                      type="number" min={1} className={inputCls}
+                      value={minPlayersPerTeam}
+                      onChange={(e) => setMinPlayersPerTeam(e.target.value)}
+                      placeholder="—"
+                    />
+                  </Field>
+                </div>
+                <div className="max-w-[160px]">
+                  <Field label="Máximo de jugadores" hint="Vacío = sin máximo.">
+                    <input
+                      type="number" min={1} className={inputCls}
+                      value={maxPlayersPerTeam}
+                      onChange={(e) => setMaxPlayersPerTeam(e.target.value)}
+                      placeholder="—"
+                    />
+                  </Field>
+                </div>
+              </div>
+
+              <p className="text-xs font-bold text-slate-600 uppercase tracking-wide mb-2">Campos obligatorios del jugador</p>
+              <p className="text-xs text-slate-500 mb-3">
+                Cada jugador deberá completar estos campos para que el equipo pueda enviar su inscripción.
+              </p>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                {ROSTER_PLAYER_FIELDS.map((f) => {
+                  const checked = requiredPlayerFields.includes(f.key)
+                  return (
+                    <label
+                      key={f.key}
+                      className={clsx(
+                        'flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer text-sm transition-colors',
+                        checked ? 'border-blue-300 bg-blue-50 text-blue-800' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50',
+                      )}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={(e) =>
+                          setRequiredPlayerFields((prev) =>
+                            e.target.checked ? [...prev, f.key] : prev.filter((k) => k !== f.key),
+                          )
+                        }
+                      />
+                      {f.label}
+                    </label>
+                  )
+                })}
+              </div>
+              {requiredPlayerFields.length === 0 && (
+                <p className="text-xs text-amber-600 mt-3">
+                  Sin campos seleccionados se aplicarán los obligatorios por defecto: nombre, apellido, documento y fecha de nacimiento.
+                </p>
+              )}
+            </SectionCard>
+          )}
+
           {tab === 'format' && (
             <SectionCard icon={Trophy} color="bg-indigo-500" title="Formato de competencia" description="Estructura y modalidad del torneo">
               <FormatSection
@@ -455,9 +600,197 @@ export function EditionEditPage({ editionId }: { editionId: string }) {
                   </div>
                 </Field>
               </div>
+
+              {/* Multas automáticas: se aplican solas al cargar la tarjeta */}
+              <div className="mt-6 border-t border-slate-100 pt-5">
+                <p className="text-xs font-bold text-slate-700">Multas y sanciones</p>
+                <p className="mt-0.5 text-[11px] text-slate-500">
+                  Se aplican automáticamente al registrar la tarjeta en la planilla.
+                  Los cambios rigen para las tarjetas nuevas, no para las multas ya generadas.
+                </p>
+
+                <div className="mt-4 grid grid-cols-3 gap-4">
+                  <Field label="Multa por roja">
+                    <div className="relative">
+                      <span className="absolute left-4 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">{currency}</span>
+                      <input
+                        type="number" min={0} step={1000}
+                        className={clsx(inputCls, 'pl-14')}
+                        value={fineRedCard}
+                        onChange={(e) => setFineRedCard(e.target.value)}
+                        placeholder="50000"
+                      />
+                    </div>
+                  </Field>
+                  <Field label="Partidos de suspensión (roja)">
+                    <input
+                      type="number" min={0} max={20} step={1}
+                      className={inputCls}
+                      value={fineRedBanned}
+                      onChange={(e) => setFineRedBanned(e.target.value)}
+                      placeholder="1"
+                    />
+                  </Field>
+                  <Field label="Sanción por roja" hint="Texto libre; si lo dejas vacío se arma con los partidos.">
+                    <input
+                      className={inputCls}
+                      maxLength={160}
+                      value={fineRedSanction}
+                      onChange={(e) => setFineRedSanction(e.target.value)}
+                      placeholder="Suspensión 1 partido"
+                    />
+                  </Field>
+                </div>
+
+                <div className="mt-4 grid grid-cols-3 gap-4">
+                  <Field label="Multa por amarilla" hint="Se cobra por cada tarjeta. 0 = no cobrar.">
+                    <div className="relative">
+                      <span className="absolute left-4 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">{currency}</span>
+                      <input
+                        type="number" min={0} step={1000}
+                        className={clsx(inputCls, 'pl-14')}
+                        value={fineYellowCard}
+                        onChange={(e) => setFineYellowCard(e.target.value)}
+                        placeholder="0"
+                      />
+                    </div>
+                  </Field>
+                </div>
+
+                <div className="mt-4 grid grid-cols-4 gap-4">
+                  <Field label="Amarillas para acumulación" hint="Cada N amarillas genera multa.">
+                    <input
+                      type="number" min={1} max={20} step={1}
+                      className={inputCls}
+                      value={fineYellowsFor}
+                      onChange={(e) => setFineYellowsFor(e.target.value)}
+                      placeholder="3"
+                    />
+                  </Field>
+                  <Field label="Multa por acumulación">
+                    <div className="relative">
+                      <span className="absolute left-4 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">{currency}</span>
+                      <input
+                        type="number" min={0} step={1000}
+                        className={clsx(inputCls, 'pl-14')}
+                        value={fineYellowAmount}
+                        onChange={(e) => setFineYellowAmount(e.target.value)}
+                        placeholder="30000"
+                      />
+                    </div>
+                  </Field>
+                  <Field label="Partidos de suspensión">
+                    <input
+                      type="number" min={0} max={20} step={1}
+                      className={inputCls}
+                      value={fineYellowBanned}
+                      onChange={(e) => setFineYellowBanned(e.target.value)}
+                      placeholder="1"
+                    />
+                  </Field>
+                  <Field label="Sanción por acumulación" hint="Opcional.">
+                    <input
+                      className={inputCls}
+                      maxLength={160}
+                      value={fineYellowSanction}
+                      onChange={(e) => setFineYellowSanction(e.target.value)}
+                      placeholder="Suspensión 1 partido"
+                    />
+                  </Field>
+                </div>
+              </div>
             </SectionCard>
           )}
 
+          {tab === 'documents' && (
+            <>
+            <SectionCard
+              icon={Code2}
+              color="bg-indigo-500"
+              title="Widget para tu página web"
+              description="Muestra la tabla de posiciones y los goleadores en tu propio sitio"
+            >
+              {embedKey ? (
+                <div className="space-y-3">
+                  <p className="text-xs text-slate-500">
+                    Copia este código y pégalo en tu web donde quieras que aparezcan las estadísticas.
+                    Se actualiza solo.
+                  </p>
+                  <pre className="text-[11px] bg-slate-900 text-slate-100 rounded-xl p-4 overflow-x-auto">
+{`<script src="https://futbol.moverix.co/embed.js" data-key="${embedKey}"></script>`}
+                  </pre>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(
+                          `<script src="https://futbol.moverix.co/embed.js" data-key="${embedKey}"></script>`,
+                        )
+                        setEmbedCopied(true)
+                        setTimeout(() => setEmbedCopied(false), 2000)
+                      }}
+                      className="flex items-center gap-2 px-3 py-2 text-xs font-bold rounded-xl border border-slate-200 hover:bg-slate-50"
+                    >
+                      <Copy size={13} /> {embedCopied ? '¡Copiado!' : 'Copiar código'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={embedBusy}
+                      onClick={async () => {
+                        if (!confirm('¿Generar una clave nueva? Los widgets ya publicados con la clave actual dejarán de funcionar.')) return
+                        setEmbedBusy(true)
+                        try { setEmbedKey((await generateEmbedKey(editionId)).embedKey) }
+                        finally { setEmbedBusy(false) }
+                      }}
+                      className="flex items-center gap-2 px-3 py-2 text-xs font-bold rounded-xl border border-slate-200 hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      <RefreshCw size={13} /> Regenerar clave
+                    </button>
+                    <button
+                      type="button"
+                      disabled={embedBusy}
+                      onClick={async () => {
+                        if (!confirm('¿Desactivar el widget? Dejará de mostrarse en las webs donde esté publicado.')) return
+                        setEmbedBusy(true)
+                        try { await revokeEmbedKey(editionId); setEmbedKey(null) }
+                        finally { setEmbedBusy(false) }
+                      }}
+                      className="flex items-center gap-2 px-3 py-2 text-xs font-bold rounded-xl border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-50"
+                    >
+                      Desactivar
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-slate-400">
+                    Muestra grupos, reclasificación, valla menos vencida y goleadores.
+                    Para elegir secciones: <code>data-view="grupos,goleadores"</code>
+                    (valores: <code>grupos</code>, <code>reclasificacion</code>, <code>valla</code>,
+                    <code>goleadores</code>). Con <code>data-theme="dark"</code> queda en fondo oscuro.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <p className="text-xs text-slate-500">
+                    Genera una clave para incrustar las estadísticas de este torneo en cualquier
+                    página web. Podrás revocarla cuando quieras.
+                  </p>
+                  <button
+                    type="button"
+                    disabled={embedBusy}
+                    onClick={async () => {
+                      setEmbedBusy(true)
+                      try { setEmbedKey((await generateEmbedKey(editionId)).embedKey) }
+                      finally { setEmbedBusy(false) }
+                    }}
+                    className="flex items-center gap-2 px-4 py-2 bg-slate-900 text-white text-xs font-bold rounded-xl hover:bg-slate-800 disabled:opacity-50"
+                  >
+                    {embedBusy ? <Loader2 size={13} className="animate-spin" /> : <Code2 size={13} />}
+                    Generar código para mi web
+                  </button>
+                </div>
+              )}
+            </SectionCard>
+            </>
+          )}
           {tab === 'documents' && (
             <SectionCard icon={FileText} color="bg-slate-500" title="Documentos" description="Reglamento y recursos">
               <Field label="URL del reglamento" hint="Enlace a Google Drive, Dropbox o cualquier URL pública.">
@@ -492,28 +825,24 @@ export function EditionEditPage({ editionId }: { editionId: string }) {
             </div>
           </div>
 
-          {formatConfig.type && (
+          {(formatConfig.phases?.length > 0 || formatConfig.type) && (
             <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4">
               <p className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-3">Formato</p>
               <div className="flex items-start gap-2">
-                <span className="text-lg">{selectedTemplate?.icon}</span>
+                {selectedTemplate && <span className="text-lg">{selectedTemplate.icon}</span>}
                 <div>
-                  <p className="text-sm font-bold text-slate-800">{selectedTemplate?.label}</p>
-                  {formatConfig.phase1 && 'groupCount' in formatConfig.phase1 && (
-                    <p className="text-xs text-slate-500 mt-0.5">
-                      {(formatConfig.phase1 as { groupCount: number }).groupCount} grupos · {(formatConfig.phase1 as { teamsPerGroup: number }).teamsPerGroup} equipos c/u
-                    </p>
+                  {selectedTemplate && <p className="text-sm font-bold text-slate-800">{selectedTemplate.label}</p>}
+                  {!selectedTemplate && formatConfig.phases?.length > 0 && (
+                    <p className="text-sm font-bold text-slate-800">Personalizado ({formatConfig.phases.length} fases)</p>
                   )}
-                  {formatConfig.phase2 && 'bracketSize' in formatConfig.phase2 && (
-                    <p className="text-xs text-slate-500 mt-0.5">
-                      Bracket de {(formatConfig.phase2 as { bracketSize: number }).bracketSize} equipos
+                  {formatConfig.phases?.map((phase, i) => (
+                    <p key={i} className="text-xs text-slate-500 mt-0.5">
+                      Fase {i + 1}: {PHASE_KIND_LABEL[phase.kind]}
+                      {phase.kind === 'groups' && ` · ${(phase as PhaseGroups).groupCount} grupos · ${(phase as PhaseGroups).teamsPerGroup} eq. c/u`}
+                      {phase.kind === 'knockout' && ` · bracket de ${(phase as PhaseKnockout).bracketSize}`}
+                      {phase.kind === 'multi_cup' && ` · ${(phase as PhaseMultiCup).cups.length} copas`}
                     </p>
-                  )}
-                  {formatConfig.phase2 && 'cups' in formatConfig.phase2 && (
-                    <p className="text-xs text-slate-500 mt-0.5">
-                      {(formatConfig.phase2 as { cups: unknown[] }).cups.length} copas
-                    </p>
-                  )}
+                  ))}
                 </div>
               </div>
             </div>
