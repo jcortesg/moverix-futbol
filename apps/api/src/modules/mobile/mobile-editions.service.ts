@@ -18,6 +18,21 @@ import {
 } from '../../db/schema'
 import { BracketsService, cupLabels } from '../brackets/brackets.service'
 
+/**
+ * Orden de ediciones en la app: primero las que tienen inscripciones abiertas,
+ * luego las que están en juego y al final las finalizadas. Dentro de cada
+ * grupo, las más recientes primero.
+ */
+const editionListOrder = [
+  sql`case
+    when ${editions.status} = 'registration' and ${editions.registrationsOpen} then 0
+    when ${editions.status} in ('registration', 'active') then 1
+    else 2
+  end`,
+  sql`${editions.startDate} desc nulls last`,
+  desc(editions.createdAt),
+]
+
 @Injectable()
 export class MobileEditionsService {
   constructor(
@@ -82,7 +97,7 @@ export class MobileEditionsService {
       .innerJoin(leagues, eq(leagues.id, editions.leagueId))
       .innerJoin(organizations, eq(organizations.id, leagues.organizationId))
       .where(conditions)
-      .orderBy(editions.startDate)
+      .orderBy(...editionListOrder)
 
     return rows
   }
@@ -181,7 +196,7 @@ export class MobileEditionsService {
           ? and(inArray(registrations.id, regIds), eq(editions.hiddenOnIos, false))
           : inArray(registrations.id, regIds),
       )
-      .orderBy(editions.startDate)
+      .orderBy(...editionListOrder)
 
     // Deduplicate by edition: keep the entry where user is director, or the first one
     const byEdition = new Map<string, typeof rows[number]>()
