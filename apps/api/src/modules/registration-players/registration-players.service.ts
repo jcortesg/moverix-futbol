@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common'
-import { and, asc, eq, isNotNull } from 'drizzle-orm'
+import { and, asc, eq, isNotNull, isNull } from 'drizzle-orm'
 import { DatabaseService } from '../../db/database.service'
 import { StorageService } from '../../common/services/storage.service'
 import { playerProfiles, registrationPlayers, registrations, teams, teamMembers } from '../../db/schema'
@@ -158,11 +158,20 @@ export class RegistrationPlayersService {
     })
   }
 
-  async findByRegistration(registrationId: string) {
+  /**
+   * Plantilla de una inscripción. Por defecto solo los ACTIVOS: la app móvil no
+   * filtra las bajas lógicas y mostraba a los retirados como si siguieran en la
+   * nómina. El panel admin pide `includeRemoved` para listar y restaurar retirados.
+   */
+  async findByRegistration(registrationId: string, includeRemoved = false) {
     return this.db
       .select()
       .from(registrationPlayers)
-      .where(eq(registrationPlayers.registrationId, registrationId))
+      .where(
+        includeRemoved
+          ? eq(registrationPlayers.registrationId, registrationId)
+          : and(eq(registrationPlayers.registrationId, registrationId), isNull(registrationPlayers.removedAt)),
+      )
       .orderBy(asc(registrationPlayers.jerseyNumber), asc(registrationPlayers.playerName))
   }
 

@@ -71,8 +71,9 @@ export type UpdateRegistrationPlayerDto = Partial<
 >
 
 export async function getRosterByRegistration(registrationId: string): Promise<RegistrationPlayerFromApi[]> {
+  // El panel lista activos y retirados (sección de bajas + restaurar).
   const { data } = await api.get<RegistrationPlayerFromApi[]>('/registration-players', {
-    params: { registrationId },
+    params: { registrationId, includeRemoved: true },
   })
   return data
 }

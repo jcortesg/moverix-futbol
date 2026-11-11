@@ -28,11 +28,16 @@ export class RegistrationPlayersController {
 
   @Get()
   @ApiQuery({ name: 'registrationId', required: true })
-  async findByRegistration(@Query('registrationId', ParseUUIDPipe) registrationId: string, @Request() req: { user: { uid: string } }) {
+  @ApiQuery({ name: 'includeRemoved', required: false, description: 'true para incluir las bajas lógicas (panel admin)' })
+  async findByRegistration(
+    @Query('registrationId', ParseUUIDPipe) registrationId: string,
+    @Request() req: { user: { uid: string } },
+    @Query('includeRemoved') includeRemoved?: string,
+  ) {
     // Lectura: organizador, DT del equipo o miembro del equipo (la app móvil
     // lee la plantilla desde aquí; un DT no es dueño de la org).
     await this.ownership.verifyRegistrationReadAccess(req.user.uid, registrationId)
-    return this.service.findByRegistration(registrationId)
+    return this.service.findByRegistration(registrationId, includeRemoved === 'true')
   }
 
   /** Agrega al delegado del equipo a la plantilla como jugador (rol dual). */
