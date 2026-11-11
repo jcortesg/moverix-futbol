@@ -1,5 +1,6 @@
 import { Injectable, ForbiddenException } from '@nestjs/common'
 import { eq, and } from 'drizzle-orm'
+import { isTeamDelegate } from '../utils/team-delegates'
 import { DatabaseService } from '../../db/database.service'
 import {
   organizationMembers,
@@ -104,7 +105,7 @@ export class OwnershipService {
       .select({ directorUid: teams.directorUid })
       .from(teams)
       .where(eq(teams.id, reg.teamId))
-    if (team?.directorUid === uid) return
+    if (team && (await isTeamDelegate(this.db, reg.teamId, uid, team.directorUid))) return
 
     // 3) Miembro del equipo
     const [member] = await this.db

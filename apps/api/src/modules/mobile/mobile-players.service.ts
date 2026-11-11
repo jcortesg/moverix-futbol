@@ -1,5 +1,6 @@
 import { Injectable, ConflictException } from '@nestjs/common'
 import { eq, sql, and, or, desc, asc, ne, like, ilike, inArray, isNull } from 'drizzle-orm'
+import { teamDelegateCondition } from '../../common/utils/team-delegates'
 import * as admin from 'firebase-admin'
 import { DatabaseService } from '../../db/database.service'
 import { StorageService } from '../../common/services/storage.service'
@@ -512,7 +513,7 @@ export class MobilePlayersService {
       .from(registrations)
       .innerJoin(editions, eq(editions.id, registrations.editionId))
       .innerJoin(teams, eq(teams.id, registrations.teamId))
-      .where(and(eq(teams.directorUid, uid), eq(registrations.status, 'draft')))
+      .where(and(teamDelegateCondition(uid), eq(registrations.status, 'draft')))
 
     const result: Pending[] = directorRows.map((r) => ({
       kind: 'director',

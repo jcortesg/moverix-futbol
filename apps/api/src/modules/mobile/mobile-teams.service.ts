@@ -16,6 +16,7 @@ import {
   ROSTER_PLAYER_FIELDS,
 } from './roster-fields'
 import { MobileNotificationsService } from './mobile-notifications.service'
+import { isTeamDelegate } from '../../common/utils/team-delegates'
 
 const ALLOWED_DOC_MIME = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'image/heic']
 const ALLOWED_IMAGE_MIME = ['image/jpeg', 'image/png', 'image/webp', 'image/heic']
@@ -150,7 +151,7 @@ export class MobileTeamsService {
       primaryColor: r.primaryColor,
       city: r.city,
       role: r.role,
-      isDirector: r.directorUid === uid,
+      isDirector: r.directorUid === uid || r.role === 'director',
       memberCount: r.memberCount,
     }))
   }
@@ -346,7 +347,7 @@ export class MobileTeamsService {
       .where(eq(teams.id, teamId))
 
     if (!team) throw new NotFoundException('Equipo no encontrado')
-    if (team.directorUid !== uid) throw new ForbiddenException('Solo el director puede compartir invitaciones')
+    if (!(await isTeamDelegate(this.db, teamId, uid, team.directorUid))) throw new ForbiddenException('Solo un delegado puede compartir invitaciones')
 
     return {
       teamName: team.name,
@@ -388,7 +389,7 @@ export class MobileTeamsService {
       .where(eq(registrations.id, registrationId))
 
     if (!reg) throw new NotFoundException('Inscripción no encontrada')
-    if (reg.directorUid !== uid) throw new ForbiddenException('Solo el director puede compartir invitaciones')
+    if (!(await isTeamDelegate(this.db, reg.teamId, uid, reg.directorUid))) throw new ForbiddenException('Solo un delegado puede compartir invitaciones')
 
     let code = reg.inviteCode
     if (!code) {
@@ -427,7 +428,7 @@ export class MobileTeamsService {
       .where(eq(teams.id, teamId))
 
     if (!team) throw new NotFoundException('Equipo no encontrado')
-    if (team.directorUid !== uid) throw new ForbiddenException('Solo el director puede regenerar el código')
+    if (!(await isTeamDelegate(this.db, teamId, uid, team.directorUid))) throw new ForbiddenException('Solo un delegado puede regenerar el código')
 
     const newCode = await this.generateUniqueAccessCode()
     await this.db
@@ -527,7 +528,8 @@ export class MobileTeamsService {
       .where(eq(teams.id, teamId))
 
     if (!team) throw new NotFoundException('Equipo no encontrado')
-    if (team.directorUid !== actorUid) throw new ForbiddenException('Solo el director puede remover miembros')
+    if (!(await isTeamDelegate(this.db, teamId, actorUid, team.directorUid))) throw new ForbiddenException('Solo un delegado puede remover miembros')
+    if (memberUid === team.directorUid) throw new ForbiddenException('No se puede remover al delegado principal')
     if (memberUid === actorUid) throw new BadRequestException('No puedes removerte a ti mismo')
 
     await this.db
@@ -849,7 +851,7 @@ export class MobileTeamsService {
       .where(eq(teams.id, teamId))
 
     if (!team) throw new NotFoundException('Equipo no encontrado')
-    if (team.directorUid !== uid) throw new ForbiddenException('Solo el director puede inscribir el equipo')
+    if (!(await isTeamDelegate(this.db, teamId, uid, team.directorUid))) throw new ForbiddenException('Solo un delegado puede inscribir el equipo')
 
     // Verify edition exists and registrations are open (flag independiente del status).
     const [edition] = await this.db
@@ -948,7 +950,7 @@ export class MobileTeamsService {
       .where(eq(teams.id, reg.teamId))
 
     if (!team) throw new NotFoundException('Equipo no encontrado')
-    if (team.directorUid !== uid) throw new ForbiddenException('Solo el director puede agregar jugadores')
+    if (!(await isTeamDelegate(this.db, reg.teamId, uid, team.directorUid))) throw new ForbiddenException('Solo un delegado puede agregar jugadores')
 
     if (!playerUids.length) throw new BadRequestException('Selecciona al menos un jugador')
 
@@ -1073,7 +1075,7 @@ export class MobileTeamsService {
       .from(teams)
       .where(eq(teams.id, reg.teamId))
 
-    if (team?.directorUid !== uid) throw new ForbiddenException('Solo el director puede remover jugadores')
+    if (!team || !(await isTeamDelegate(this.db, reg.teamId, uid, team.directorUid))) throw new ForbiddenException('Solo un delegado puede remover jugadores')
 
     await this.assertRosterOpen(registrationId)
 
@@ -1119,7 +1121,7 @@ export class MobileTeamsService {
       .where(eq(teams.id, reg.teamId))
 
     if (!team) throw new NotFoundException('Equipo no encontrado')
-    if (team.directorUid !== actorUid && playerUid !== actorUid) {
+    if (playerUid !== actorUid && !(await isTeamDelegate(this.db, reg.teamId, actorUid, team.directorUid))) {
       throw new ForbiddenException('Solo el director o el propio jugador pueden editar estos datos')
     }
 
@@ -1199,7 +1201,7 @@ export class MobileTeamsService {
       .where(eq(teams.id, reg.teamId))
     if (!team) throw new NotFoundException('Equipo no encontrado')
 
-    if (team.directorUid !== actorUid) {
+    if (!(await isTeamDelegate(this.db, reg.teamId, actorUid, team.directorUid))) {
       const [member] = await this.db
         .select({ id: teamMembers.id })
         .from(teamMembers)
@@ -1239,7 +1241,7 @@ export class MobileTeamsService {
       .from(teams)
       .where(eq(teams.id, reg.teamId))
     if (!team) throw new NotFoundException('Equipo no encontrado')
-    if (team.directorUid !== actorUid && playerUid !== actorUid) {
+    if (playerUid !== actorUid && !(await isTeamDelegate(this.db, reg.teamId, actorUid, team.directorUid))) {
       throw new ForbiddenException('Solo el director o el propio jugador pueden editar estos datos')
     }
 
@@ -1420,7 +1422,7 @@ export class MobileTeamsService {
       .where(eq(teams.id, reg.teamId))
 
     if (!team) throw new NotFoundException('Equipo no encontrado')
-    if (team.directorUid !== uid) throw new ForbiddenException('Solo el director puede enviar la inscripción')
+    if (!(await isTeamDelegate(this.db, reg.teamId, uid, team.directorUid))) throw new ForbiddenException('Solo un delegado puede enviar la inscripción')
     if (reg.status !== 'draft') {
       throw new BadRequestException('Esta inscripción ya fue enviada')
     }

@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common'
 import { FieldValue } from 'firebase-admin/firestore'
 import { and, eq, inArray, or } from 'drizzle-orm'
+import { teamDelegateCondition } from '../../common/utils/team-delegates'
 import { FirestoreService } from '../../common/services/firestore.service'
 import { DatabaseService } from '../../db/database.service'
 import {
@@ -311,7 +312,7 @@ export class MobileCommentsService {
     const [director] = await this.db
       .select({ id: teams.id })
       .from(teams)
-      .where(and(inArray(teams.id, teamIds), eq(teams.directorUid, uid)))
+      .where(and(inArray(teams.id, teamIds), teamDelegateCondition(uid)))
     if (director) return
 
     const [player] = await this.db

@@ -5,6 +5,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common'
 import { and, asc, eq } from 'drizzle-orm'
+import { isTeamDelegate } from '../../common/utils/team-delegates'
 import { DatabaseService } from '../../db/database.service'
 import { StorageService } from '../../common/services/storage.service'
 import {
@@ -286,8 +287,8 @@ export class PublicTeamsService {
       .select({ directorUid: teams.directorUid })
       .from(teams)
       .where(eq(teams.id, reg.teamId))
-    if (!team || team.directorUid !== uid) {
-      throw new ForbiddenException('No eres el director de este equipo')
+    if (!team || !(await isTeamDelegate(this.db, reg.teamId, uid, team.directorUid))) {
+      throw new ForbiddenException('No eres delegado de este equipo')
     }
     return reg
   }

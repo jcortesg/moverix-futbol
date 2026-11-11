@@ -1,5 +1,6 @@
 import { ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
 import { eq, ilike, or } from 'drizzle-orm'
+import { isTeamDelegate } from '../../common/utils/team-delegates'
 import * as admin from 'firebase-admin'
 import { DatabaseService } from '../../db/database.service'
 import { StorageService } from '../../common/services/storage.service'
@@ -115,10 +116,16 @@ export class TeamsService {
     const team = await this.findOne(id)
     // Autorizado: el director del equipo O el organizador (admin de la org del torneo
     // donde el equipo está inscrito). Así el dueño del torneo también edita nombres/logos.
-    if (team.directorUid !== actorUid) {
-      const isAdmin = await this.ownership.isTeamEditionAdmin(actorUid, id)
-      if (!isAdmin) {
-        throw new ForbiddenException('Sólo el director del equipo o el organizador pueden editarlo')
+    // Delegados adicionales también editan nombre/logo, pero no cambian al principal.
+    const isPrincipal = team.directorUid === actorUid
+    const isAdmin = !isPrincipal && (await this.ownership.isTeamEditionAdmin(actorUid, id))
+    if (!isPrincipal && !isAdmin) {
+      const isDelegate = await isTeamDelegate(this.db, id, actorUid, team.directorUid)
+      if (!isDelegate) {
+        throw new ForbiddenException('Sólo un delegado del equipo o el organizador pueden editarlo')
+      }
+      if (dto.directorEmail !== undefined) {
+        throw new ForbiddenException('Sólo el delegado principal o el organizador pueden cambiar el delegado')
       }
     }
     const { directorEmail, ...rest } = dto

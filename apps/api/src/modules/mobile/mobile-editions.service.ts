@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common'
 import { eq, ne, sql, or, and, inArray, desc, asc } from 'drizzle-orm'
+import { delegateTeamIds, teamDelegateCondition } from '../../common/utils/team-delegates'
 import { DatabaseService } from '../../db/database.service'
 import {
   editions,
@@ -113,7 +114,7 @@ export class MobileEditionsService {
       .select({ registrationId: registrations.id })
       .from(registrations)
       .innerJoin(teams, eq(teams.id, registrations.teamId))
-      .where(eq(teams.directorUid, uid))
+      .where(teamDelegateCondition(uid))
 
     const asPlayer = this.db
       .select({ registrationId: registrationPlayers.registrationId })
@@ -199,10 +200,13 @@ export class MobileEditionsService {
       .orderBy(...editionListOrder)
 
     // Deduplicate by edition: keep the entry where user is director, or the first one
+    // Delegado = principal (teams.director_uid) o adicional (team_members.role='director').
+    const delegateOf = new Set(await delegateTeamIds(this.db, uid, [...new Set(rows.map((r) => r.team.id))]))
+    const isDelegate = (r: typeof rows[number]) => delegateOf.has(r.team.id)
     const byEdition = new Map<string, typeof rows[number]>()
     for (const r of rows) {
       const existing = byEdition.get(r.edition.id)
-      if (!existing || (r.team.directorUid === uid && existing.team.directorUid !== uid)) {
+      if (!existing || (isDelegate(r) && !isDelegate(existing))) {
         byEdition.set(r.edition.id, r)
       }
     }
@@ -215,7 +219,7 @@ export class MobileEditionsService {
       group: r.group && r.group.id ? r.group : null,
       registration: r.registration,
       teamsCount: r.teamsCount,
-      isDirector: r.team.directorUid === uid,
+      isDirector: isDelegate(r),
     }))
   }
 

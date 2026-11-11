@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common'
 import { and, eq, inArray, isNull } from 'drizzle-orm'
+import { isTeamDelegate } from '../../common/utils/team-delegates'
 import { DatabaseService } from '../../db/database.service'
 import { editions, registrationPlayers, registrations, teams } from '../../db/schema'
 import { isFieldFilled, resolveRequiredFields } from '../mobile/roster-fields'
@@ -208,7 +209,7 @@ export class RegistrationsService {
     const reg = await this.findOne(id)
     // Only the registrar or the team director can withdraw; status check stays in admin UI
     const [team] = await this.db.select().from(teams).where(eq(teams.id, reg.teamId))
-    const isDirector = team?.directorUid === actorUid
+    const isDirector = !!team && (await isTeamDelegate(this.db, team.id, actorUid, team.directorUid))
     const isRegistrar = reg.registeredByUid === actorUid
     if (!isDirector && !isRegistrar) {
       // Admin panel may bypass with its own endpoint; keep this conservative
