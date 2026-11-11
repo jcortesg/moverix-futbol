@@ -2,6 +2,7 @@ import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from
 import { Reflector } from '@nestjs/core'
 import * as admin from 'firebase-admin'
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator'
+import { currentActor } from '../context/actor-context'
 
 @Injectable()
 export class FirebaseAuthGuard implements CanActivate {
@@ -22,6 +23,12 @@ export class FirebaseAuthGuard implements CanActivate {
     try {
       const decoded = await admin.auth().verifyIdToken(token)
       request.user = decoded
+      // Para el log de cambios: la BD sabe quién hace cada modificación.
+      const actor = currentActor()
+      if (actor) {
+        actor.uid = decoded.uid
+        actor.email = decoded.email
+      }
       console.log(`[AUTH] uid=${decoded.uid} email=${decoded.email}`)
       return true
     } catch {

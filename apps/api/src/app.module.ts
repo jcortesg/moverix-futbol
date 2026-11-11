@@ -34,6 +34,7 @@ import { HealthController } from './health.controller'
 import { UploadsController } from './common/controllers/uploads.controller'
 import { StorageService } from './common/services/storage.service'
 import { UserAuthMiddleware } from './common/middleware/user-auth.middleware'
+import { ActorContextMiddleware } from './common/middleware/actor-context.middleware'
 
 @Module({
   imports: [
@@ -75,6 +76,6 @@ import { UserAuthMiddleware } from './common/middleware/user-auth.middleware'
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
-    consumer.apply(UserAuthMiddleware).forRoutes('*')
+    consumer.apply(ActorContextMiddleware, UserAuthMiddleware).forRoutes('*')
   }
 }
