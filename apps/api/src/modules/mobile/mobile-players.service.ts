@@ -659,8 +659,10 @@ export class MobilePlayersService {
     await this.myProfile(uid)
 
     // Normaliza handles de redes: quita @, espacios y URL; guarda solo el usuario.
-    const handle = (v?: string) => {
+    const handle = (v?: string | null) => {
       if (v === undefined) return undefined
+      // La app manda null al vaciar una red social; antes esto rompía con .trim() (500).
+      if (v === null || typeof v !== 'string') return null
       const s = v.trim().replace(/^@+/, '').replace(/\s+/g, '')
       if (!s) return null
       // si pegan una URL, toma el último segmento no vacío
