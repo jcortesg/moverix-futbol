@@ -112,6 +112,29 @@ export class StorageService {
     return this.streamFromGcs(key)
   }
 
+  /**
+   * Copia un documento privado a otra entidad (p. ej. la cédula de un jugador
+   * de una inscripción anterior a su fila en una inscripción nueva). Cada fila
+   * queda con su propia copia: borrar una no rompe la otra.
+   */
+  async copyPrivate(srcKey: string, entityPath: string, label = 'doc'): Promise<string> {
+    const ext = path.extname(srcKey).toLowerCase() || '.bin'
+    const key = `${PRIVATE_PREFIX}/${entityPath}/${label}-${Date.now()}${ext}`
+
+    if (!isProduction()) {
+      const dest = path.join(LOCAL_UPLOADS_DIR, key)
+      fs.mkdirSync(path.dirname(dest), { recursive: true })
+      fs.copyFileSync(path.join(LOCAL_UPLOADS_DIR, srcKey), dest)
+      return key
+    }
+
+    const { Storage } = await import('@google-cloud/storage')
+    const storage = new Storage()
+    const bucket = storage.bucket(process.env.GCS_BUCKET ?? 'moverix-assets')
+    await bucket.file(srcKey).copy(bucket.file(key))
+    return key
+  }
+
   /** Borra un documento privado por su clave. Best-effort. */
   async deletePrivate(key: string): Promise<void> {
     if (!key) return

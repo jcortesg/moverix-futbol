@@ -34,6 +34,25 @@ const PLAYER_FILE_KINDS = {
   photo: { column: 'photoFileUrl', label: 'photo', mimes: ALLOWED_IMAGE_MIME },
 } as const
 type PlayerFileKind = keyof typeof PLAYER_FILE_KINDS
+type RegistrationPlayerPosition = (typeof registrationPlayers.$inferSelect)['position']
+type PlayerHistory = {
+  playerUid: string
+  firstName: string | null
+  lastName: string | null
+  docNumber: string | null
+  birthDate: string | null
+  employer: string | null
+  phone: string | null
+  email: string | null
+  healthProvider: string | null
+  docFileUrl: string | null
+  photoFileUrl: string | null
+  emergencyContactName: string | null
+  emergencyContactPhone: string | null
+  position: RegistrationPlayerPosition
+  jerseyNumber: number | null
+  sameTeam: boolean
+}
 import {
   teams,
   teamMembers,
@@ -301,23 +320,25 @@ export class MobileTeamsService {
     const rosterOpen = isRosterOpen(reg.rosterLocked, reg.rostersLocked)
     let addedToRegistration = false
     if (rosterOpen) {
-      const { firstName, lastName } = splitName(profile?.fullName ?? playerName)
+      const history = await this.loadPlayerHistory([uid], reg.teamId)
+      const dedupe = await this.rosterUniqueGuard(reg.registrationId)
+      const row = this.buildRosterRow(
+        reg.registrationId,
+        uid,
+        playerName,
+        { fullName: profile?.fullName ?? null, position: profile?.position ?? null, docNumber: profile?.docNumber ?? null, phone: null },
+        history.get(uid),
+        dedupe,
+      )
       const inserted = await this.db
         .insert(registrationPlayers)
-        .values({
-          registrationId: reg.registrationId,
-          playerUid: uid,
-          playerName,
-          position: profile?.position ?? null,
-          docNumber: profile?.docNumber ?? null,
-          firstName,
-          lastName,
-        })
+        .values(row)
         .onConflictDoNothing({
           target: [registrationPlayers.registrationId, registrationPlayers.playerUid],
         })
-        .returning({ id: registrationPlayers.id })
+        .returning({ id: registrationPlayers.id, playerUid: registrationPlayers.playerUid, isNew: sql<boolean>`true` })
       addedToRegistration = inserted.length > 0
+      await this.copyHistoryFiles(inserted, history)
     }
 
     const message = !rosterOpen
@@ -1009,24 +1030,18 @@ export class MobileTeamsService {
       return { added: 0, message: 'Todos los jugadores ya estan inscritos' }
     }
 
-    await this.db
+    // Precarga: perfil + la ficha más completa del jugador en inscripciones
+    // anteriores (fecha de nacimiento, EPS, correo, contacto de emergencia,
+    // foto y documento). Así el delegado no vuelve a pedir todo cada torneo.
+    const history = await this.loadPlayerHistory(toInsert.map((m) => m.playerUid), reg.teamId)
+    const dedupe = await this.rosterUniqueGuard(registrationId)
+
+    const inserted = await this.db
       .insert(registrationPlayers)
       .values(
-        toInsert.map((m) => {
-          const { firstName, lastName } = splitName(m.fullName ?? m.playerName)
-          return {
-            registrationId,
-            playerUid: m.playerUid,
-            playerName: m.playerName,
-            position: m.position,
-            docNumber: m.docNumber,
-            // El teléfono del perfil prefila la inscripción: es uno de los
-            // campos obligatorios que más faltaba.
-            phone: m.phone,
-            firstName,
-            lastName,
-          }
-        }),
+        toInsert.map((m) =>
+          this.buildRosterRow(registrationId, m.playerUid, m.playerName, m, history.get(m.playerUid), dedupe),
+        ),
       )
       // Si el jugador ya tenia fila (activa o dada de baja) se REVIVE y se
       // conservan sus datos previos: documento, foto, dorsal, EPS.
@@ -1034,6 +1049,13 @@ export class MobileTeamsService {
         target: [registrationPlayers.registrationId, registrationPlayers.playerUid],
         set: { removedAt: null, removedBy: null },
       })
+      .returning({
+        id: registrationPlayers.id,
+        playerUid: registrationPlayers.playerUid,
+        isNew: sql<boolean>`(xmax = 0)`,
+      })
+
+    await this.copyHistoryFiles(inserted, history)
 
     // Evento en el feed de cada jugador inscrito (incluido el DT si se agrega
     // a sí mismo: queda como registro de su entrada a la plantilla). Best-effort.
@@ -1102,6 +1124,131 @@ export class MobileTeamsService {
       )
 
     return { removed: playerUid }
+  }
+
+  // ── Precarga de fichas desde inscripciones anteriores ─────────
+
+  /**
+   * Por jugador, su ficha más completa en cualquier inscripción (prefiere la
+   * más llena y, a igualdad, la más reciente). Solo cuentan cuentas reales.
+   */
+  private async loadPlayerHistory(playerUids: string[], teamId: string) {
+    const map = new Map<string, PlayerHistory>()
+    const uids = playerUids.filter((u) => u && !u.startsWith('manual:'))
+    if (!uids.length) return map
+
+    const rp = registrationPlayers
+    const filled = sql`(
+      (${rp.docNumber} IS NOT NULL)::int + (${rp.birthDate} IS NOT NULL)::int + (${rp.phone} IS NOT NULL)::int +
+      (${rp.email} IS NOT NULL)::int + (${rp.healthProvider} IS NOT NULL)::int + (${rp.employer} IS NOT NULL)::int +
+      (${rp.emergencyContactName} IS NOT NULL)::int + (${rp.emergencyContactPhone} IS NOT NULL)::int +
+      (${rp.docFileUrl} IS NOT NULL)::int + (${rp.photoFileUrl} IS NOT NULL)::int
+    )`
+    const rows = await this.db
+      .selectDistinctOn([rp.playerUid], {
+        playerUid: rp.playerUid,
+        firstName: rp.firstName,
+        lastName: rp.lastName,
+        docNumber: rp.docNumber,
+        birthDate: rp.birthDate,
+        employer: rp.employer,
+        phone: rp.phone,
+        email: rp.email,
+        healthProvider: rp.healthProvider,
+        docFileUrl: rp.docFileUrl,
+        photoFileUrl: rp.photoFileUrl,
+        emergencyContactName: rp.emergencyContactName,
+        emergencyContactPhone: rp.emergencyContactPhone,
+        position: rp.position,
+        jerseyNumber: rp.jerseyNumber,
+        sameTeam: sql<boolean>`(${registrations.teamId} = ${teamId})`,
+      })
+      .from(rp)
+      .innerJoin(registrations, eq(registrations.id, rp.registrationId))
+      .where(inArray(rp.playerUid, uids))
+      .orderBy(rp.playerUid, desc(filled), desc(rp.addedAt))
+
+    for (const r of rows) map.set(r.playerUid, r)
+    return map
+  }
+
+  /** Cédulas y correos ya usados en la nómina (índices únicos por inscripción). */
+  private async rosterUniqueGuard(registrationId: string) {
+    const rows = await this.db
+      .select({ docNumber: registrationPlayers.docNumber, email: registrationPlayers.email })
+      .from(registrationPlayers)
+      .where(and(eq(registrationPlayers.registrationId, registrationId), isNull(registrationPlayers.removedAt)))
+    return {
+      docs: new Set(rows.map((r) => r.docNumber).filter(Boolean) as string[]),
+      emails: new Set(rows.map((r) => r.email?.toLowerCase()).filter(Boolean) as string[]),
+    }
+  }
+
+  /**
+   * Arma la fila de nómina: el perfil manda en cédula/teléfono/posición (es lo
+   * más actual); el resto sale del historial. Una cédula o correo repetido en
+   * la misma nómina se deja vacío para no chocar con los índices únicos (varios
+   * jugadores suelen compartir el correo del delegado).
+   */
+  private buildRosterRow(
+    registrationId: string,
+    playerUid: string,
+    playerName: string,
+    profile: { fullName: string | null; position: RegistrationPlayerPosition | null; docNumber: string | null; phone: string | null },
+    hist: PlayerHistory | undefined,
+    dedupe: { docs: Set<string>; emails: Set<string> },
+  ) {
+    const split = splitName(profile.fullName ?? playerName)
+    let docNumber = profile.docNumber ?? hist?.docNumber ?? null
+    if (docNumber && dedupe.docs.has(docNumber)) docNumber = null
+    if (docNumber) dedupe.docs.add(docNumber)
+    let email = hist?.email ?? null
+    if (email && dedupe.emails.has(email.toLowerCase())) email = null
+    if (email) dedupe.emails.add(email.toLowerCase())
+
+    return {
+      registrationId,
+      playerUid,
+      playerName,
+      firstName: hist?.firstName ?? split.firstName,
+      lastName: hist?.lastName ?? split.lastName,
+      position: profile.position ?? hist?.position ?? null,
+      // El dorsal es del equipo: solo se hereda si la ficha anterior era del mismo.
+      jerseyNumber: hist?.sameTeam ? hist.jerseyNumber : null,
+      docNumber,
+      phone: profile.phone ?? hist?.phone ?? null,
+      email,
+      birthDate: hist?.birthDate ?? null,
+      employer: hist?.employer ?? null,
+      healthProvider: hist?.healthProvider ?? null,
+      emergencyContactName: hist?.emergencyContactName ?? null,
+      emergencyContactPhone: hist?.emergencyContactPhone ?? null,
+    }
+  }
+
+  /** Copia foto y documento de la ficha anterior a las filas NUEVAS. Best-effort. */
+  private async copyHistoryFiles(
+    rows: { id: string; playerUid: string; isNew: boolean }[],
+    history: Map<string, PlayerHistory>,
+  ) {
+    for (const row of rows) {
+      if (!row.isNew) continue
+      const hist = history.get(row.playerUid)
+      if (!hist) continue
+      const patch: { docFileUrl?: string; photoFileUrl?: string } = {}
+      for (const [kind, column] of [['document', 'docFileUrl'], ['photo', 'photoFileUrl']] as const) {
+        const src = hist[column]
+        if (!src) continue
+        try {
+          patch[column] = await this.storage.copyPrivate(src, `registration-players/${row.id}`, PLAYER_FILE_KINDS[kind].label)
+        } catch {
+          // Si el archivo viejo no existe, el jugador lo vuelve a subir.
+        }
+      }
+      if (patch.docFileUrl || patch.photoFileUrl) {
+        await this.db.update(registrationPlayers).set(patch).where(eq(registrationPlayers.id, row.id))
+      }
+    }
   }
 
   // ── Update a registration player's detail fields ───────
