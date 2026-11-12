@@ -264,7 +264,9 @@ export class MobilePlayersService {
             position: profile.position,
             preferredFoot: profile.preferredFoot,
             birthYear: profile.birthYear,
-            docNumber: profile.docNumber,
+            // Dato sensible: la cédula solo la ve el dueño del perfil. La app la
+            // lee de me/profile; antes salía en el perfil público de cualquiera.
+            docNumber: viewerUid && viewerUid === uid ? profile.docNumber : null,
             instagram: profile.instagram,
             tiktok: profile.tiktok,
             facebook: profile.facebook,
