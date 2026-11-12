@@ -33,12 +33,19 @@ export const registrationPlayers = pgTable(
     // dorsal, y mantiene al jugador ligado a sus goles del torneo.
     removedAt: timestamp('removed_at', { withTimezone: true }),
     removedBy: varchar('removed_by', { length: 128 }),
+    // Código/enlace personal para que el jugador reclame una ficha creada por el
+    // delegado sin cuenta (player_uid 'manual:'). Único en toda la plataforma.
+    inviteCode: varchar('invite_code', { length: 8 }),
+    claimedAt: timestamp('claimed_at', { withTimezone: true }),
   },
   (t) => ({
     registrationPlayerUnique: uniqueIndex('registration_players_reg_uid_unique').on(t.registrationId, t.playerUid),
     registrationEmailUnique: uniqueIndex('registration_players_reg_email_unique')
       .on(t.registrationId, t.email)
       .where(sql`${t.email} IS NOT NULL AND ${t.removedAt} IS NULL`),
+    inviteCodeUnique: uniqueIndex('registration_players_invite_code_unique')
+      .on(t.inviteCode)
+      .where(sql`${t.inviteCode} IS NOT NULL`),
     registrationDocUnique: uniqueIndex('registration_players_reg_doc_unique')
       .on(t.registrationId, t.docNumber)
       .where(sql`${t.docNumber} IS NOT NULL AND ${t.removedAt} IS NULL`),

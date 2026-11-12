@@ -224,6 +224,26 @@ export class MobileTeamsController {
     return this.service.removePlayerFile(registrationId, playerUid, 'photo', req.user.uid)
   }
 
+  /** Opción C: el delegado agrega a la lista con nombre y celular (sin cuenta) */
+  @Post('registration/:registrationId/list-players')
+  addListPlayer(
+    @Param('registrationId', ParseUUIDPipe) registrationId: string,
+    @Body() body: { firstName: string; lastName?: string | null; phone?: string | null; docNumber?: string | null },
+    @Req() req: any,
+  ) {
+    return this.service.addListPlayer(registrationId, req.user.uid, body ?? ({} as any))
+  }
+
+  /** Mensaje con el enlace personal de un jugador de la lista — solo delegados */
+  @Get('registration/:registrationId/players/:playerUid/invite')
+  listPlayerInvite(
+    @Param('registrationId', ParseUUIDPipe) registrationId: string,
+    @Param('playerUid') playerUid: string,
+    @Req() req: any,
+  ) {
+    return this.service.getListPlayerInvite(registrationId, playerUid, req.user.uid)
+  }
+
   /** Submit the registration for review (draft → pending) — director only */
   @Post('registration/:registrationId/submit')
   submit(

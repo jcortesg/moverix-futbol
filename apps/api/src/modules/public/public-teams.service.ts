@@ -4,7 +4,7 @@ import {
   BadRequestException,
   ForbiddenException,
 } from '@nestjs/common'
-import { and, asc, eq } from 'drizzle-orm'
+import { and, asc, eq, isNull } from 'drizzle-orm'
 import { isTeamDelegate } from '../../common/utils/team-delegates'
 import { DatabaseService } from '../../db/database.service'
 import { StorageService } from '../../common/services/storage.service'
@@ -65,6 +65,23 @@ export class PublicTeamsService {
       .innerJoin(editions, eq(editions.id, registrations.editionId))
       .where(eq(registrations.inviteCode, accessCode))
     if (reg) return { ...reg, accessCode }
+
+    // 3) Código PERSONAL de un jugador agregado por el delegado (opción C).
+    //    No expone el nombre del jugador: solo equipo y torneo.
+    const [personal] = await this.db
+      .select({
+        name: teams.name,
+        logoUrl: teams.logoUrl,
+        city: teams.city,
+        primaryColor: teams.primaryColor,
+        editionName: editions.name,
+      })
+      .from(registrationPlayers)
+      .innerJoin(registrations, eq(registrations.id, registrationPlayers.registrationId))
+      .innerJoin(teams, eq(teams.id, registrations.teamId))
+      .innerJoin(editions, eq(editions.id, registrations.editionId))
+      .where(and(eq(registrationPlayers.inviteCode, accessCode), isNull(registrationPlayers.removedAt)))
+    if (personal) return { ...personal, accessCode }
 
     throw new NotFoundException('Invitación no válida')
   }

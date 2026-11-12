@@ -5,7 +5,8 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common'
-import { eq, or, sql, desc, asc, and, inArray, isNull, ne } from 'drizzle-orm'
+import { eq, or, sql, desc, asc, and, inArray, isNull, ne, like } from 'drizzle-orm'
+import { randomUUID } from 'crypto'
 import { DatabaseService } from '../../db/database.service'
 import { StorageService } from '../../common/services/storage.service'
 import { SocialPostsService } from '../social/social-posts.service'
@@ -115,11 +116,7 @@ export class MobileTeamsService {
   private async generateUniqueAccessCode(): Promise<string> {
     for (let attempt = 0; attempt < 10; attempt++) {
       const code = generateAccessCode()
-      const [exists] = await this.db
-        .select({ id: teams.id })
-        .from(teams)
-        .where(eq(teams.accessCode, code))
-      if (!exists) return code
+      if (!(await this.codeTaken(code))) return code
     }
     throw new ConflictException('No se pudo generar un código único, intenta de nuevo')
   }
@@ -227,6 +224,16 @@ export class MobileTeamsService {
     const accessCode = code?.toUpperCase().trim()
     if (!accessCode) throw new BadRequestException('Ingresa el código de invitación')
 
+    // 0) ¿Es un código PERSONAL (ficha creada por el delegado con nombre y
+    // celular)? Liga esa ficha a la cuenta de quien lo ingresa.
+    const [personal] = await this.db
+      .select({ id: registrationPlayers.id })
+      .from(registrationPlayers)
+      .where(and(eq(registrationPlayers.inviteCode, accessCode), isNull(registrationPlayers.removedAt)))
+    if (personal) {
+      return this.claimPersonalInvite(uid, displayName, personal.id)
+    }
+
     // 1) ¿Es un código de invitación de inscripción? El invitado entra directo a
     // la nómina de ese campeonato (además de al club). Códigos de 8 chars.
     const [regInvite] = await this.db
@@ -320,6 +327,25 @@ export class MobileTeamsService {
     // criterio que agregar desde la app: el candado de nómina del organizador).
     const rosterOpen = isRosterOpen(reg.rosterLocked, reg.rostersLocked)
     let addedToRegistration = false
+
+    // Si el delegado ya lo había agregado a la lista (ficha sin cuenta), se une
+    // con esa ficha en vez de crear otra: se reconoce por cédula o celular.
+    const manualMatch = await this.findManualRowFor(reg.registrationId, uid, profile?.docNumber ?? null)
+    if (manualMatch) {
+      await this.claimManualRow(uid, playerName, manualMatch.id)
+      return {
+        teamId: reg.teamId,
+        teamName: reg.teamName,
+        logoUrl: reg.logoUrl,
+        registrationId: reg.registrationId,
+        editionName: reg.editionName,
+        addedToRegistration: true,
+        registrationsOpen: reg.registrationsOpen,
+        rosterOpen,
+        message: `¡Listo! Ya estás en la nómina de ${reg.teamName} en ${reg.editionName}.`,
+      }
+    }
+
     if (rosterOpen) {
       const history = await this.loadPlayerHistory([uid], reg.teamId)
       const dedupe = await this.rosterUniqueGuard(reg.registrationId)
@@ -1182,6 +1208,251 @@ export class MobileTeamsService {
     return member
   }
 
+  // ── Opción A + C: jugadores en la lista sin cuenta y enlace personal ─────
+
+  /** ¿El código ya existe como código de equipo, de inscripción o personal? */
+  private async codeTaken(code: string) {
+    const [t] = await this.db.select({ id: teams.id }).from(teams).where(eq(teams.accessCode, code))
+    if (t) return true
+    const [r] = await this.db.select({ id: registrations.id }).from(registrations).where(eq(registrations.inviteCode, code))
+    if (r) return true
+    const [p] = await this.db
+      .select({ id: registrationPlayers.id })
+      .from(registrationPlayers)
+      .where(eq(registrationPlayers.inviteCode, code))
+    return !!p
+  }
+
+  private async generateUniquePersonalCode(): Promise<string> {
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const code = generateAccessCode()
+      if (!(await this.codeTaken(code))) return code
+    }
+    throw new ConflictException('No se pudo generar un código único, intenta de nuevo')
+  }
+
+  /**
+   * El delegado agrega a alguien a la lista con nombre y celular, aunque todavía
+   * no tenga la app. La ficha queda con uid 'manual:' y un código personal que
+   * se le comparte; al ingresarlo, la ficha pasa a su cuenta.
+   */
+  async addListPlayer(
+    registrationId: string,
+    actorUid: string,
+    input: { firstName: string; lastName?: string | null; phone?: string | null; docNumber?: string | null },
+  ) {
+    const reg = await this.registrationForDelegate(registrationId, actorUid)
+    await this.assertRosterOpen(registrationId)
+
+    const firstName = (input.firstName ?? '').trim()
+    const lastName = (input.lastName ?? '').trim() || null
+    if (!firstName) throw new BadRequestException('Escribe el nombre del jugador')
+    const phone = normalizePhone(input.phone)
+    const docNumber = (input.docNumber ?? '').replace(/\D/g, '') || null
+    if (!phone && !docNumber) throw new BadRequestException('Escribe el celular del jugador')
+
+    // ¿Ya está en esta nómina? (misma cédula o mismo celular)
+    const active = await this.db
+      .select({ playerName: registrationPlayers.playerName, phone: registrationPlayers.phone, docNumber: registrationPlayers.docNumber })
+      .from(registrationPlayers)
+      .where(and(eq(registrationPlayers.registrationId, registrationId), isNull(registrationPlayers.removedAt)))
+    const dup = active.find(
+      (p) => (docNumber && p.docNumber === docNumber) || (phone && normalizePhone(p.phone) === phone),
+    )
+    if (dup) throw new ConflictException(`${dup.playerName} ya está en la nómina con ese celular o cédula`)
+
+    const code = await this.generateUniquePersonalCode()
+    const playerName = [firstName, lastName].filter(Boolean).join(' ')
+    const [row] = await this.db
+      .insert(registrationPlayers)
+      .values({
+        registrationId,
+        playerUid: `manual:${randomUUID()}`,
+        playerName,
+        firstName,
+        lastName,
+        phone,
+        docNumber,
+        inviteCode: code,
+      })
+      .returning()
+
+    return {
+      player: stripInviteCode(row),
+      invite: this.personalInviteText(code, firstName, reg.teamName, reg.editionName),
+    }
+  }
+
+  /** Mensaje con el enlace personal de un jugador de la lista (solo delegados). */
+  async getListPlayerInvite(registrationId: string, playerUid: string, actorUid: string) {
+    const reg = await this.registrationForDelegate(registrationId, actorUid)
+    const [row] = await this.db
+      .select()
+      .from(registrationPlayers)
+      .where(and(eq(registrationPlayers.registrationId, registrationId), eq(registrationPlayers.playerUid, playerUid)))
+    if (!row) throw new NotFoundException('Jugador no encontrado en esta nómina')
+    if (!row.playerUid.startsWith('manual:')) {
+      throw new BadRequestException(`${row.playerName} ya entró a la app con su cuenta`)
+    }
+    let code = row.inviteCode
+    if (!code) {
+      code = await this.generateUniquePersonalCode()
+      await this.db.update(registrationPlayers).set({ inviteCode: code }).where(eq(registrationPlayers.id, row.id))
+    }
+    return this.personalInviteText(code, row.firstName ?? row.playerName, reg.teamName, reg.editionName)
+  }
+
+  private personalInviteText(code: string, firstName: string, teamName: string, editionName: string) {
+    return {
+      code,
+      url: `${INVITE_BASE_URL}/i/${code}`,
+      shareText: [
+        `⚽ Hola ${firstName}, ${teamName} te inscribió en ${editionName} (Moverix)`,
+        ``,
+        `Completa tus datos con este enlace, es solo para ti:`,
+        `👉 ${INVITE_BASE_URL}/i/${code}`,
+        `🔑 Código: ${code}`,
+        ``,
+        `Descarga la app:`,
+        `📱 iOS: ${IOS_STORE_URL}`,
+        `🤖 Android: ${ANDROID_STORE_URL}`,
+      ].join('\n'),
+    }
+  }
+
+  private async registrationForDelegate(registrationId: string, actorUid: string) {
+    const [reg] = await this.db
+      .select({
+        teamId: registrations.teamId,
+        directorUid: teams.directorUid,
+        teamName: teams.name,
+        editionName: editions.name,
+      })
+      .from(registrations)
+      .innerJoin(teams, eq(teams.id, registrations.teamId))
+      .innerJoin(editions, eq(editions.id, registrations.editionId))
+      .where(eq(registrations.id, registrationId))
+    if (!reg) throw new NotFoundException('Inscripción no encontrada')
+    if (!(await isTeamDelegate(this.db, reg.teamId, actorUid, reg.directorUid))) {
+      throw new ForbiddenException('Solo un delegado puede gestionar la nómina')
+    }
+    return reg
+  }
+
+  /** Ficha sin cuenta de esta nómina que corresponde al usuario (cédula o celular). */
+  private async findManualRowFor(registrationId: string, uid: string, docNumber: string | null) {
+    const [profile] = await this.db
+      .select({ phone: playerProfiles.phone, docNumber: playerProfiles.docNumber })
+      .from(playerProfiles)
+      .where(eq(playerProfiles.uid, uid))
+    const doc = docNumber ?? profile?.docNumber ?? null
+    const phone = normalizePhone(profile?.phone)
+    if (!doc && !phone) return null
+
+    const rows = await this.db
+      .select({ id: registrationPlayers.id, docNumber: registrationPlayers.docNumber, phone: registrationPlayers.phone })
+      .from(registrationPlayers)
+      .where(
+        and(
+          eq(registrationPlayers.registrationId, registrationId),
+          isNull(registrationPlayers.removedAt),
+          like(registrationPlayers.playerUid, 'manual:%'),
+        ),
+      )
+    return rows.find((r) => (doc && r.docNumber === doc) || (phone && normalizePhone(r.phone) === phone)) ?? null
+  }
+
+  /** Ingreso con código personal: liga la ficha de la lista a esta cuenta. */
+  private async claimPersonalInvite(uid: string, displayName: string, rowId: string) {
+    const [row] = await this.db
+      .select({
+        id: registrationPlayers.id,
+        playerUid: registrationPlayers.playerUid,
+        registrationId: registrationPlayers.registrationId,
+        teamId: registrations.teamId,
+        teamName: teams.name,
+        logoUrl: teams.logoUrl,
+        editionName: editions.name,
+        registrationsOpen: editions.registrationsOpen,
+      })
+      .from(registrationPlayers)
+      .innerJoin(registrations, eq(registrations.id, registrationPlayers.registrationId))
+      .innerJoin(teams, eq(teams.id, registrations.teamId))
+      .innerJoin(editions, eq(editions.id, registrations.editionId))
+      .where(eq(registrationPlayers.id, rowId))
+    if (!row) throw new NotFoundException('Código de invitación inválido')
+    if (!row.playerUid.startsWith('manual:') && row.playerUid !== uid) {
+      throw new ConflictException('Este enlace ya lo usó otra cuenta. Pídele uno nuevo a tu delegado.')
+    }
+
+    const [profile] = await this.db
+      .select({ fullName: playerProfiles.fullName })
+      .from(playerProfiles)
+      .where(eq(playerProfiles.uid, uid))
+    await this.claimManualRow(uid, profile?.fullName ?? displayName, row.id)
+
+    return {
+      teamId: row.teamId,
+      teamName: row.teamName,
+      logoUrl: row.logoUrl,
+      registrationId: row.registrationId,
+      editionName: row.editionName,
+      addedToRegistration: true,
+      registrationsOpen: row.registrationsOpen,
+      rosterOpen: true,
+      message: `¡Listo! Ya estás en la nómina de ${row.teamName} en ${row.editionName}. Completa tus datos.`,
+    }
+  }
+
+  /**
+   * Pasa una ficha 'manual:' a la cuenta real. Si la persona ya tenía ficha en
+   * esa nómina, se completan sus campos vacíos con los de la lista y la ficha
+   * manual se elimina. Mueve también lo que la ficha manual tuviera en partidos.
+   */
+  private async claimManualRow(uid: string, playerName: string, rowId: string) {
+    await this.db.transaction(async (tx) => {
+      const [manual] = await tx.select().from(registrationPlayers).where(eq(registrationPlayers.id, rowId))
+      if (!manual || manual.playerUid === uid) return
+      const manualUid = manual.playerUid
+
+      const [reg] = await tx
+        .select({ teamId: registrations.teamId })
+        .from(registrations)
+        .where(eq(registrations.id, manual.registrationId))
+
+      await tx
+        .insert(teamMembers)
+        .values({ teamId: reg.teamId, playerUid: uid, playerName, role: 'player', isPlayer: true })
+        .onConflictDoUpdate({ target: [teamMembers.teamId, teamMembers.playerUid], set: { isPlayer: true } })
+
+      const [own] = await tx
+        .select()
+        .from(registrationPlayers)
+        .where(and(eq(registrationPlayers.registrationId, manual.registrationId), eq(registrationPlayers.playerUid, uid)))
+
+      if (own) {
+        const fill: Record<string, unknown> = { removedAt: null, removedBy: null }
+        for (const k of [
+          'firstName', 'lastName', 'docNumber', 'birthDate', 'employer', 'phone', 'email', 'healthProvider',
+          'jerseyNumber', 'position', 'docFileUrl', 'photoFileUrl', 'emergencyContactName', 'emergencyContactPhone',
+        ] as const) {
+          if (own[k] == null && manual[k] != null) fill[k] = manual[k]
+        }
+        await tx.delete(registrationPlayers).where(eq(registrationPlayers.id, manual.id))
+        await tx.update(registrationPlayers).set(fill).where(eq(registrationPlayers.id, own.id))
+      } else {
+        await tx
+          .update(registrationPlayers)
+          .set({ playerUid: uid, playerName, inviteCode: null, claimedAt: new Date() })
+          .where(eq(registrationPlayers.id, manual.id))
+      }
+
+      // Lo que se haya anotado a la ficha manual en partidos pasa a la cuenta.
+      await tx.update(matchEvents).set({ playerUid: uid }).where(eq(matchEvents.playerUid, manualUid))
+      await tx.update(matchEvents).set({ assistPlayerUid: uid }).where(eq(matchEvents.assistPlayerUid, manualUid))
+    })
+  }
+
   // ── Precarga de fichas desde inscripciones anteriores ─────────
 
   /**
@@ -1422,7 +1693,8 @@ export class MobileTeamsService {
 
     // Los jugadores dados de baja no se listan, salvo para el propio jugador
     // (que debe poder ver su fila marcada). El organizador los ve en el admin.
-    return this.db
+    // El código personal no se expone: con él otro miembro podría reclamar la ficha.
+    const rows = await this.db
       .select()
       .from(registrationPlayers)
       .where(
@@ -1435,6 +1707,7 @@ export class MobileTeamsService {
         ),
       )
       .orderBy(asc(registrationPlayers.jerseyNumber), asc(registrationPlayers.playerName))
+    return rows.map(stripInviteCode)
   }
 
   // ── Archivos del jugador (cédula, foto) desde el móvil ──
@@ -1595,10 +1868,19 @@ export class MobileTeamsService {
       })
       .filter((x): x is { playerName: string; fields: string[] } => x !== null)
 
+    // Estado por jugador para el delegado: sin entrar (ficha sin cuenta),
+    // faltan datos, o listo.
+    const playerStates = players.map((p) => {
+      const missing = requiredFields.filter((key) => !isFieldFilled(p as Record<string, unknown>, key))
+      const state = p.playerUid.startsWith('manual:') ? 'sin_entrar' : missing.length ? 'faltan_datos' : 'listo'
+      return { playerUid: p.playerUid, playerName: p.playerName, state, missing: missing.map((k) => fieldLabel(k)) }
+    })
+
     return {
       registrationId,
       status: reg.status,
       playersCount: players.length,
+      playerStates,
       minPlayers: min,
       maxPlayers: max,
       countIssue,
@@ -1758,4 +2040,16 @@ export class MobileTeamsService {
  */
 export function isRosterOpen(teamLocked: boolean | null | undefined, editionLocked: boolean | null | undefined): boolean {
   return !(teamLocked ?? editionLocked ?? false)
+}
+
+/** Celular colombiano normalizado a sus últimos 10 dígitos (sin +57, espacios ni guiones). */
+export function normalizePhone(phone: string | null | undefined): string | null {
+  const digits = (phone ?? '').replace(/\D/g, '')
+  if (digits.length < 7) return null
+  return digits.length > 10 ? digits.slice(-10) : digits
+}
+
+function stripInviteCode<T extends { inviteCode?: string | null }>(row: T): Omit<T, 'inviteCode'> {
+  const { inviteCode: _omit, ...rest } = row
+  return rest
 }
