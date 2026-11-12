@@ -216,6 +216,8 @@ export class MobileTeamsService {
         editionId: registrations.editionId,
         editionName: editions.name,
         registrationsOpen: editions.registrationsOpen,
+        rosterLocked: registrations.rosterLocked,
+        rostersLocked: editions.rostersLocked,
         teamName: teams.name,
         logoUrl: teams.logoUrl,
       })
@@ -271,6 +273,8 @@ export class MobileTeamsService {
       teamId: string
       editionName: string
       registrationsOpen: boolean
+      rosterLocked: boolean | null
+      rostersLocked: boolean
       teamName: string
       logoUrl: string | null
     },
@@ -292,9 +296,11 @@ export class MobileTeamsService {
       .values({ teamId: reg.teamId, playerUid: uid, playerName, role: 'player', isPlayer: true })
       .onConflictDoNothing({ target: [teamMembers.teamId, teamMembers.playerUid] })
 
-    // 2. Agregar a la nómina del campeonato si las inscripciones están abiertas.
+    // 2. Agregar a la nómina del campeonato si la nómina está abierta (mismo
+    // criterio que agregar desde la app: el candado de nómina del organizador).
+    const rosterOpen = isRosterOpen(reg.rosterLocked, reg.rostersLocked)
     let addedToRegistration = false
-    if (reg.registrationsOpen) {
+    if (rosterOpen) {
       const { firstName, lastName } = splitName(profile?.fullName ?? playerName)
       const inserted = await this.db
         .insert(registrationPlayers)
@@ -314,8 +320,8 @@ export class MobileTeamsService {
       addedToRegistration = inserted.length > 0
     }
 
-    const message = !reg.registrationsOpen
-      ? `Te uniste a ${reg.teamName}, pero las inscripciones de ${reg.editionName} están cerradas.`
+    const message = !rosterOpen
+      ? `Te uniste a ${reg.teamName}, pero la nómina de ${reg.editionName} está cerrada.`
       : addedToRegistration
         ? `¡Listo! Entraste a la nómina de ${reg.teamName} en ${reg.editionName}.`
         : `Ya estabas en la nómina de ${reg.editionName}.`
@@ -328,6 +334,7 @@ export class MobileTeamsService {
       editionName: reg.editionName,
       addedToRegistration,
       registrationsOpen: reg.registrationsOpen,
+      rosterOpen,
       message,
     }
   }
@@ -776,12 +783,14 @@ export class MobileTeamsService {
         status: registrations.status,
         paidAt: registrations.paidAt,
         approvedAt: registrations.approvedAt,
+        rosterLocked: registrations.rosterLocked,
         edition: {
           id: editions.id,
           name: editions.name,
           season: editions.season,
           status: editions.status,
           registrationsOpen: editions.registrationsOpen,
+          rostersLocked: editions.rostersLocked,
           logoUrl: editions.logoUrl,
           startDate: editions.startDate,
           endDate: editions.endDate,
@@ -824,6 +833,9 @@ export class MobileTeamsService {
 
     return {
       ...row,
+      // Fuente única de "nómina abierta" para la app: el mismo criterio que usa
+      // el API para dejar agregar, quitar o editar jugadores.
+      rosterOpen: isRosterOpen(row.rosterLocked, row.edition.rostersLocked),
       group: row.group?.id ? row.group : null,
       rosterConfig: {
         minPlayersPerTeam: row.edition.minPlayersPerTeam,
@@ -912,11 +924,7 @@ export class MobileTeamsService {
       .where(eq(registrations.id, registrationId))
 
     if (!row) return
-
-    // El equipo puede tener una excepción explícita (abierto o cerrado); si no
-    // define nada (null), hereda el cierre general de la edición.
-    const locked = row.teamLocked ?? row.editionLocked
-    if (!locked) return
+    if (isRosterOpen(row.teamLocked, row.editionLocked)) return
 
     throw new BadRequestException(
       row.teamLocked === true
@@ -1436,10 +1444,13 @@ export class MobileTeamsService {
       throw new BadRequestException('Las inscripciones de este campeonato están cerradas.')
     }
 
-    // Misma validación que ve la app en el indicador de plantilla.
+    // Solo bloquea el mínimo/máximo de jugadores. Los datos incompletos NO
+    // bloquean el envío (decisión de producto 2026-11-12): cada jugador los
+    // sigue completando después, y se pueden agregar jugadores mientras la
+    // nómina esté abierta. La app muestra cuántos faltan.
     const { countIssue, missingByPlayer } = await this.getRosterStatus(registrationId)
 
-    if (countIssue || missingByPlayer.length) {
+    if (countIssue) {
       throw new BadRequestException({
         message: 'La plantilla no cumple los requisitos de inscripción',
         reason: 'roster_invalid',
@@ -1535,4 +1546,13 @@ export class MobileTeamsService {
       payments: teamPayments,
     }
   }
+}
+
+/**
+ * ¿La nómina está abierta? El candado del equipo (registrations.roster_locked)
+ * manda si está definido (true/false); si es null hereda el de la edición
+ * (editions.rosters_locked). Mismo criterio para el API y para la app.
+ */
+export function isRosterOpen(teamLocked: boolean | null | undefined, editionLocked: boolean | null | undefined): boolean {
+  return !(teamLocked ?? editionLocked ?? false)
 }
