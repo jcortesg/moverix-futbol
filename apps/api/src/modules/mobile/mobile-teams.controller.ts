@@ -70,6 +70,17 @@ export class MobileTeamsController {
     return this.service.removeMember(id, memberUid, req.user.uid)
   }
 
+  /** Nombrar / quitar delegado adicional (solo el delegado principal) */
+  @Patch(':id/members/:memberUid/delegate')
+  setDelegate(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('memberUid') memberUid: string,
+    @Body() body: { delegate: boolean },
+    @Req() req: any,
+  ) {
+    return this.service.setMemberDelegate(id, memberUid, body?.delegate === true, req.user.uid)
+  }
+
   /** Leave a team */
   @Delete(':id/leave')
   leave(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {

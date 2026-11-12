@@ -171,6 +171,7 @@ export class MobileTeamsService {
       city: r.city,
       role: r.role,
       isDirector: r.directorUid === uid || r.role === 'director',
+      isPrincipal: r.directorUid === uid,
       memberCount: r.memberCount,
     }))
   }
@@ -476,6 +477,7 @@ export class MobileTeamsService {
         playerUid: teamMembers.playerUid,
         playerName: teamMembers.playerName,
         role: teamMembers.role,
+        isPrincipal: sql<boolean>`(${teams.directorUid} = ${teamMembers.playerUid})`,
         isPlayer: teamMembers.isPlayer,
         joinedAt: teamMembers.joinedAt,
         avatarUrl: playerProfiles.avatarUrl,
@@ -483,6 +485,7 @@ export class MobileTeamsService {
         position: playerProfiles.position,
       })
       .from(teamMembers)
+      .innerJoin(teams, eq(teams.id, teamMembers.teamId))
       .leftJoin(playerProfiles, eq(playerProfiles.uid, teamMembers.playerUid))
       .where(eq(teamMembers.teamId, teamId))
       .orderBy(desc(teamMembers.role), asc(teamMembers.joinedAt))
@@ -1107,7 +1110,9 @@ export class MobileTeamsService {
 
     if (!team || !(await isTeamDelegate(this.db, reg.teamId, uid, team.directorUid))) throw new ForbiddenException('Solo un delegado puede remover jugadores')
 
-    await this.assertRosterOpen(registrationId)
+    // Retirar NO requiere nómina abierta ni aprobación del organizador (decisión
+    // de producto 2026-11-12). Lo que el candado impide es inscribir a otro en su
+    // lugar: agregar sí exige nómina abierta (assertRosterOpen en addPlayers).
 
     // Baja LOGICA: nunca se borra la fila. Asi se conservan documento, foto y
     // dorsal, y el jugador sigue ligado a los goles que ya anoto en el torneo
@@ -1123,7 +1128,58 @@ export class MobileTeamsService {
         ),
       )
 
-    return { removed: playerUid }
+    const rosterOpen = await this.rosterOpenFor(registrationId)
+    return { removed: playerUid, rosterOpen }
+  }
+
+  private async rosterOpenFor(registrationId: string) {
+    const [row] = await this.db
+      .select({ teamLocked: registrations.rosterLocked, editionLocked: editions.rostersLocked })
+      .from(registrations)
+      .innerJoin(editions, eq(editions.id, registrations.editionId))
+      .where(eq(registrations.id, registrationId))
+    return row ? isRosterOpen(row.teamLocked, row.editionLocked) : false
+  }
+
+  // ── Delegados adicionales ──────────────────────────────────
+
+  /**
+   * El delegado principal (teams.director_uid) nombra o quita delegados
+   * adicionales entre los miembros del club. Un adicional tiene los mismos
+   * permisos de gestión, pero no puede tocar al principal ni nombrar a otros.
+   */
+  async setMemberDelegate(teamId: string, memberUid: string, makeDelegate: boolean, actorUid: string) {
+    const [team] = await this.db
+      .select({ directorUid: teams.directorUid })
+      .from(teams)
+      .where(eq(teams.id, teamId))
+    if (!team) throw new NotFoundException('Equipo no encontrado')
+    if (team.directorUid !== actorUid) {
+      throw new ForbiddenException('Solo el delegado principal puede nombrar o quitar delegados')
+    }
+    if (memberUid === team.directorUid) {
+      throw new BadRequestException('El delegado principal no se puede cambiar desde aquí')
+    }
+    if (makeDelegate && memberUid.startsWith('manual:')) {
+      throw new BadRequestException('Solo puede ser delegado alguien con cuenta en la app')
+    }
+
+    const [member] = await this.db
+      .update(teamMembers)
+      .set({ role: makeDelegate ? 'director' : 'player' })
+      .where(and(eq(teamMembers.teamId, teamId), eq(teamMembers.playerUid, memberUid)))
+      .returning({ playerUid: teamMembers.playerUid, playerName: teamMembers.playerName, role: teamMembers.role })
+    if (!member) throw new NotFoundException('Esa persona no es miembro del equipo')
+
+    if (makeDelegate) {
+      await this.notifications.createFor([memberUid], {
+        type: 'team',
+        title: 'Ahora eres delegado',
+        body: 'Ya puedes invitar jugadores, armar la nómina e inscribir al equipo.',
+        data: { kind: 'team', teamId },
+      })
+    }
+    return member
   }
 
   // ── Precarga de fichas desde inscripciones anteriores ─────────

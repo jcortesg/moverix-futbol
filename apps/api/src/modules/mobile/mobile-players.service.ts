@@ -284,6 +284,35 @@ export class MobilePlayersService {
   }
 
   /**
+   * Crea el perfil sin romper por concurrencia. Al abrir la app por primera vez
+   * llegan varias peticiones a la vez y todas intentaban crearlo: una ganaba y
+   * el resto respondía 500 por el índice único de uid. Ahora, si ya existe, se
+   * usa ese. Además el username (8 caracteres del uid en minúscula) puede chocar
+   * con OTRA cuenta; en ese caso se prueba uno más largo.
+   */
+  private async createProfileSafely(uid: string, fullName: string) {
+    const lower = uid.toLowerCase()
+    const candidates = [
+      `player_${lower.slice(0, 8)}`,
+      `player_${lower.slice(0, 16)}`,
+      `player_${lower}`.slice(0, 40),
+    ]
+    for (const username of candidates) {
+      const [created] = await this.db
+        .insert(playerProfiles)
+        .values({ uid, username, fullName })
+        .onConflictDoNothing()
+        .returning()
+      if (created) return created
+
+      // Conflicto: o lo creó otra petición (mismo uid) o el username es de otra cuenta.
+      const [existing] = await this.db.select().from(playerProfiles).where(eq(playerProfiles.uid, uid))
+      if (existing) return existing
+    }
+    throw new ConflictException('No se pudo crear el perfil, intenta de nuevo')
+  }
+
+  /**
    * Get or create the authenticated user's profile.
    */
   async myProfile(uid: string, email?: string, name?: string) {
@@ -298,12 +327,7 @@ export class MobilePlayersService {
       // displayName (la app lo setea con updateProfile justo tras el registro), así
       // que se consulta a Firebase antes de caer en el prefijo del email.
       const displayName = name ?? (await this.firebaseDisplayName(uid)) ?? email?.split('@')[0] ?? 'Jugador'
-      const username = `player_${uid.slice(0, 8).toLowerCase()}`
-      const [created] = await this.db
-        .insert(playerProfiles)
-        .values({ uid, username, fullName: displayName })
-        .returning()
-      profile = created
+      profile = await this.createProfileSafely(uid, displayName)
     }
 
     // Reclama equipos donde este email quedó como delegado pendiente. Idempotente
