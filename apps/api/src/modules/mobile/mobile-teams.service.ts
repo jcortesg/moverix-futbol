@@ -1650,6 +1650,19 @@ export class MobileTeamsService {
         .set(patch)
         .where(eq(registrationPlayers.id, player.id))
         .returning()
+      // El nombre visible de la nómina sigue a nombre + apellido: antes se quedaba
+      // con el usuario del correo con que se unió (p. ej. "unionescueladeformacion").
+      if ('firstName' in patch || 'lastName' in patch) {
+        const full = [updated.firstName, updated.lastName].map((x) => (x ?? '').trim()).filter(Boolean).join(' ')
+        if (full && full !== updated.playerName) {
+          const [renamed] = await this.db
+            .update(registrationPlayers)
+            .set({ playerName: full.slice(0, 160) })
+            .where(eq(registrationPlayers.id, player.id))
+            .returning()
+          return renamed
+        }
+      }
       return updated
     } catch (err: any) {
       // drizzle-orm 0.45 envuelve el error de Postgres en err.cause; el code/constraint

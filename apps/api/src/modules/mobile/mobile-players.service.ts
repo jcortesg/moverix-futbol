@@ -714,6 +714,20 @@ export class MobilePlayersService {
         .where(eq(playerProfiles.uid, uid))
         .returning()
 
+      // Nombre real nuevo: reemplaza el usuario del correo (sin espacios) con que
+      // quedó en clubes y nóminas. No pisa nombres que ya tengan nombre y apellido.
+      const newName = (rest.fullName ?? '').trim()
+      if (newName.includes(' ')) {
+        await this.db
+          .update(teamMembers)
+          .set({ playerName: newName.slice(0, 160) })
+          .where(and(eq(teamMembers.playerUid, uid), sql`position(' ' in ${teamMembers.playerName}) = 0`))
+        await this.db
+          .update(registrationPlayers)
+          .set({ playerName: newName.slice(0, 160) })
+          .where(and(eq(registrationPlayers.playerUid, uid), sql`position(' ' in ${registrationPlayers.playerName}) = 0`))
+      }
+
       // Claim records that match this docNumber
       if (docNumber) {
         await this.claimByDocNumber(uid, docNumber, updated.fullName)
