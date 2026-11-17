@@ -1,5 +1,5 @@
 import {
-  Body, Controller, Delete, Get, Param, ParseUUIDPipe, Patch, Post, Req, Res,
+  Body, Controller, Delete, Get, Param, ParseUUIDPipe, Patch, Post, Query, Req, Res,
   UploadedFile, UseInterceptors,
 } from '@nestjs/common'
 import { FileInterceptor } from '@nestjs/platform-express'
@@ -23,6 +23,15 @@ export class MobileTeamsController {
   @Get(':id')
   profile(@Param('id', ParseUUIDPipe) id: string) {
     return this.service.profile(id)
+  }
+
+  @Get(':id/matches')
+  matches(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+  ) {
+    return this.service.matchesPage(id, Number(page ?? 1), Number(pageSize ?? 10))
   }
 
   @Get(':id/dashboard')

@@ -863,7 +863,15 @@ export class MobileTeamsService {
     return { recentMatches, upcomingMatches, championships, stats }
   }
 
-  private async getRecentMatches(teamId: string) {
+  /** Partidos jugados del equipo, paginados (más reciente primero). */
+  async matchesPage(teamId: string, page = 1, pageSize = 10) {
+    const size = Math.min(Math.max(Math.trunc(pageSize) || 10, 1), 50)
+    const p = Math.max(Math.trunc(page) || 1, 1)
+    const rows = await this.getRecentMatches(teamId, size + 1, (p - 1) * size)
+    return { items: rows.slice(0, size), page: p, pageSize: size, hasMore: rows.length > size }
+  }
+
+  private async getRecentMatches(teamId: string, limit = 30, offset = 0) {
     const rows = await this.db
       .select({
         id: matches.id,
@@ -907,8 +915,9 @@ export class MobileTeamsService {
           or(eq(matches.homeTeamId, teamId), eq(matches.awayTeamId, teamId)),
         ),
       )
-      .orderBy(desc(matches.finishedAt))
-      .limit(30)
+      .orderBy(desc(matches.finishedAt), desc(matches.id))
+      .limit(limit)
+      .offset(offset)
 
     if (rows.length === 0) return []
 
