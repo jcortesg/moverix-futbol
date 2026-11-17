@@ -17,7 +17,9 @@ import {
   ROSTER_PLAYER_FIELDS,
 } from './roster-fields'
 import { MobileNotificationsService } from './mobile-notifications.service'
+import { computeFinalPosition, type FinalPosition } from './team-final-position'
 import { isTeamDelegate } from '../../common/utils/team-delegates'
+import { reactivateFormerMember, retireTeamMember } from '../../common/utils/team-former-members'
 
 const ALLOWED_DOC_MIME = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'image/heic']
 const ALLOWED_IMAGE_MIME = ['image/jpeg', 'image/png', 'image/webp', 'image/heic']
@@ -71,6 +73,8 @@ import {
   payments,
   venues,
   referees,
+  bracketSlots,
+  teamFormerMembers,
 } from '../../db/schema'
 
 function generateSlug(name: string): string {
@@ -287,6 +291,7 @@ export class MobileTeamsService {
       playerName,
       role: 'player',
     })
+    await reactivateFormerMember(this.db, team.id, uid)
 
     return { teamId: team.id, teamName: team.name, logoUrl: team.logoUrl }
   }
@@ -322,6 +327,7 @@ export class MobileTeamsService {
       .insert(teamMembers)
       .values({ teamId: reg.teamId, playerUid: uid, playerName, role: 'player', isPlayer: true })
       .onConflictDoNothing({ target: [teamMembers.teamId, teamMembers.playerUid] })
+    await reactivateFormerMember(this.db, reg.teamId, uid)
 
     // 2. Agregar a la nómina del campeonato si la nómina está abierta (mismo
     // criterio que agregar desde la app: el candado de nómina del organizador).
@@ -509,6 +515,18 @@ export class MobileTeamsService {
         avatarUrl: playerProfiles.avatarUrl,
         username: playerProfiles.username,
         position: playerProfiles.position,
+        // Dorsal de su ficha de nómina más reciente con este equipo (si tiene).
+        jerseyNumber: sql<number | null>`(
+          SELECT rp.jersey_number
+          FROM registration_players rp
+          JOIN registrations r ON r.id = rp.registration_id
+          WHERE r.team_id = ${teamMembers.teamId}
+            AND rp.player_uid = ${teamMembers.playerUid}
+            AND rp.removed_at IS NULL
+            AND rp.jersey_number IS NOT NULL
+          ORDER BY rp.added_at DESC
+          LIMIT 1
+        )`,
       })
       .from(teamMembers)
       .innerJoin(teams, eq(teams.id, teamMembers.teamId))
@@ -589,9 +607,8 @@ export class MobileTeamsService {
     if (memberUid === team.directorUid) throw new ForbiddenException('No se puede remover al delegado principal')
     if (memberUid === actorUid) throw new BadRequestException('No puedes removerte a ti mismo')
 
-    await this.db
-      .delete(teamMembers)
-      .where(and(eq(teamMembers.teamId, teamId), eq(teamMembers.playerUid, memberUid)))
+    // Borra de team_members y lo deja como exjugador, en una transacción.
+    await retireTeamMember(this.db, teamId, memberUid, 'removed', actorUid)
 
     return { removed: memberUid }
   }
@@ -605,9 +622,7 @@ export class MobileTeamsService {
     if (!team) throw new NotFoundException('Equipo no encontrado')
     if (team.directorUid === uid) throw new BadRequestException('El director no puede abandonar el equipo')
 
-    await this.db
-      .delete(teamMembers)
-      .where(and(eq(teamMembers.teamId, teamId), eq(teamMembers.playerUid, uid)))
+    await retireTeamMember(this.db, teamId, uid, 'left', null)
 
     return { left: teamId }
   }
@@ -630,11 +645,22 @@ export class MobileTeamsService {
 
     if (!team) throw new NotFoundException('Equipo no encontrado')
 
-    const [members, championships, dashData] = await Promise.all([
+    const [members, rawChampionships, dashData, formerPlayers, recordAndForm, topScorers] = await Promise.all([
       this.getMembers(teamId),
       this.getChampionships(teamId),
       this.dashboard(teamId),
+      this.getFormerPlayers(teamId),
+      this.getRecordAndForm(teamId),
+      this.getTopScorers(teamId),
     ])
+
+    const championships = await this.withFinalPositions(teamId, rawChampionships)
+    const honours = { champion: 0, runnerUp: 0, third: 0 }
+    for (const c of championships) {
+      if (c.finalPosition === 'champion') honours.champion++
+      else if (c.finalPosition === 'runner_up') honours.runnerUp++
+      else if (c.finalPosition === 'third') honours.third++
+    }
 
     return {
       ...team,
@@ -643,7 +669,178 @@ export class MobileTeamsService {
       championships,
       stats: dashData.stats,
       recentMatches: dashData.recentMatches.slice(0, 10),
+      formerPlayers,
+      form: recordAndForm.form,
+      record: recordAndForm.record,
+      topScorers,
+      honours,
     }
+  }
+
+  /** Exjugadores (team_former_members), el más reciente primero. */
+  private async getFormerPlayers(teamId: string) {
+    const rows = await this.db
+      .select({
+        uid: teamFormerMembers.playerUid,
+        storedName: teamFormerMembers.playerName,
+        fullName: playerProfiles.fullName,
+        avatarUrl: playerProfiles.avatarUrl,
+        leftAt: teamFormerMembers.leftAt,
+        reason: teamFormerMembers.reason,
+      })
+      .from(teamFormerMembers)
+      // Las fichas 'manual:' no tienen perfil: se listan, pero sin buscar avatar.
+      .leftJoin(
+        playerProfiles,
+        and(eq(playerProfiles.uid, teamFormerMembers.playerUid), sql`${teamFormerMembers.playerUid} NOT LIKE 'manual:%'`),
+      )
+      .where(and(eq(teamFormerMembers.teamId, teamId), isNull(playerProfiles.deactivatedAt)))
+      .orderBy(desc(teamFormerMembers.leftAt))
+
+    return rows.map((r) => ({
+      uid: r.uid,
+      name: r.fullName ?? r.storedName,
+      avatarUrl: r.avatarUrl ?? null,
+      leftAt: new Date(r.leftAt).toISOString(),
+      reason: r.reason,
+    }))
+  }
+
+  /**
+   * Balance (PJ/G/E/P/GF/GC) y racha de los últimos 5, agregados en SQL.
+   * Cuentan los partidos terminados con marcador ('finished' y 'walkover', igual
+   * que las tablas). Una llave definida por penales cuenta como empate.
+   */
+  private async getRecordAndForm(teamId: string) {
+    const isMine = or(eq(matches.homeTeamId, teamId), eq(matches.awayTeamId, teamId))
+    const played = and(
+      inArray(matches.status, ['finished', 'walkover']),
+      sql`${matches.homeScore} IS NOT NULL AND ${matches.awayScore} IS NOT NULL`,
+      isMine,
+    )
+    const gf = sql`CASE WHEN ${matches.homeTeamId} = ${teamId} THEN ${matches.homeScore} ELSE ${matches.awayScore} END`
+    const ga = sql`CASE WHEN ${matches.homeTeamId} = ${teamId} THEN ${matches.awayScore} ELSE ${matches.homeScore} END`
+
+    const [[agg], last5] = await Promise.all([
+      this.db
+        .select({
+          played: sql<number>`count(*)::int`,
+          won: sql<number>`count(*) FILTER (WHERE ${gf} > ${ga})::int`,
+          drawn: sql<number>`count(*) FILTER (WHERE ${gf} = ${ga})::int`,
+          lost: sql<number>`count(*) FILTER (WHERE ${gf} < ${ga})::int`,
+          goalsFor: sql<number>`COALESCE(sum(${gf}), 0)::int`,
+          goalsAgainst: sql<number>`COALESCE(sum(${ga}), 0)::int`,
+        })
+        .from(matches)
+        .where(played),
+      this.db
+        .select({
+          result: sql<'W' | 'D' | 'L'>`CASE WHEN ${gf} > ${ga} THEN 'W' WHEN ${gf} = ${ga} THEN 'D' ELSE 'L' END`,
+        })
+        .from(matches)
+        .where(played)
+        .orderBy(desc(sql`COALESCE(${matches.finishedAt}, ${matches.scheduledAt}, ${matches.createdAt})`))
+        .limit(5),
+    ])
+
+    return {
+      record: {
+        played: agg?.played ?? 0,
+        won: agg?.won ?? 0,
+        drawn: agg?.drawn ?? 0,
+        lost: agg?.lost ?? 0,
+        goalsFor: agg?.goalsFor ?? 0,
+        goalsAgainst: agg?.goalsAgainst ?? 0,
+      },
+      // Más antiguo primero: el más reciente queda a la derecha.
+      form: last5.map((r) => r.result).reverse(),
+    }
+  }
+
+  /** Top 5 goleadores históricos del equipo (gol + penal; sin autogoles). */
+  private async getTopScorers(teamId: string) {
+    const goals = sql<number>`count(*)::int`
+    const rows = await this.db
+      .select({
+        uid: sql<string>`${matchEvents.playerUid}`,
+        lastName: sql<string | null>`(array_agg(${matchEvents.playerName} ORDER BY ${matchEvents.createdAt} DESC) FILTER (WHERE ${matchEvents.playerName} IS NOT NULL))[1]`,
+        fullName: sql<string | null>`max(${playerProfiles.fullName})`,
+        avatarUrl: sql<string | null>`max(${playerProfiles.avatarUrl})`,
+        goals,
+        isCurrent: sql<boolean>`EXISTS (
+          SELECT 1 FROM team_members tm
+          WHERE tm.team_id = ${teamId} AND tm.player_uid = ${matchEvents.playerUid}
+        )`,
+      })
+      .from(matchEvents)
+      .innerJoin(matches, eq(matches.id, matchEvents.matchId))
+      .leftJoin(
+        playerProfiles,
+        and(eq(playerProfiles.uid, matchEvents.playerUid), sql`${matchEvents.playerUid} NOT LIKE 'manual:%'`),
+      )
+      .where(
+        and(
+          eq(matchEvents.teamId, teamId),
+          inArray(matchEvents.eventType, ['goal', 'penalty_scored']),
+          sql`${matchEvents.playerUid} IS NOT NULL`,
+          inArray(matches.status, ['finished', 'live', 'walkover']),
+        ),
+      )
+      .groupBy(matchEvents.playerUid)
+      .orderBy(desc(goals), asc(sql`min(${matchEvents.createdAt})`))
+      .limit(5)
+
+    return rows.map((r) => ({
+      uid: r.uid,
+      name: r.fullName ?? r.lastName ?? 'Jugador',
+      avatarUrl: r.avatarUrl ?? null,
+      goals: r.goals,
+      isCurrent: !!r.isCurrent,
+    }))
+  }
+
+  /**
+   * Agrega finalPosition y playsThirdPlace a cada campeonato, leyendo el cuadro
+   * de todas las ediciones en una sola consulta (ver team-final-position.ts).
+   */
+  private async withFinalPositions<
+    T extends { status: string; edition: { id: string; status: string } },
+  >(teamId: string, championships: T[]) {
+    const editionIds = [...new Set(championships.map((c) => c.edition.id))]
+    const slots = editionIds.length
+      ? await this.db
+          .select({
+            id: bracketSlots.id,
+            editionId: bracketSlots.editionId,
+            cupName: bracketSlots.cupName,
+            round: bracketSlots.round,
+            homeTeamId: bracketSlots.homeTeamId,
+            awayTeamId: bracketSlots.awayTeamId,
+            winnerId: bracketSlots.winnerId,
+            nextSlotId: bracketSlots.nextSlotId,
+            loserNextSlotId: bracketSlots.loserNextSlotId,
+            createdAt: bracketSlots.createdAt,
+          })
+          .from(bracketSlots)
+          .where(inArray(bracketSlots.editionId, editionIds))
+      : []
+
+    const byEdition = new Map<string, typeof slots>()
+    for (const s of slots) {
+      const list = byEdition.get(s.editionId) ?? []
+      list.push(s)
+      byEdition.set(s.editionId, list)
+    }
+
+    return championships.map((c) => {
+      const { finalPosition, playsThirdPlace } = computeFinalPosition({
+        slots: byEdition.get(c.edition.id) ?? [],
+        teamId,
+        editionStatus: c.edition.status,
+        registrationStatus: c.status,
+      })
+      return { ...c, finalPosition: finalPosition as FinalPosition, playsThirdPlace }
+    })
   }
 
   // ── Dashboard (existing) ───────────────────────────────────
@@ -1424,6 +1621,7 @@ export class MobileTeamsService {
         .insert(teamMembers)
         .values({ teamId: reg.teamId, playerUid: uid, playerName, role: 'player', isPlayer: true })
         .onConflictDoUpdate({ target: [teamMembers.teamId, teamMembers.playerUid], set: { isPlayer: true } })
+      await reactivateFormerMember(tx, reg.teamId, uid)
 
       const [own] = await tx
         .select()

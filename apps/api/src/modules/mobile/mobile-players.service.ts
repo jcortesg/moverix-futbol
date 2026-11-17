@@ -1,6 +1,7 @@
 import { Injectable, ConflictException } from '@nestjs/common'
 import { eq, sql, and, or, desc, asc, ne, like, ilike, inArray, isNull } from 'drizzle-orm'
 import { teamDelegateCondition } from '../../common/utils/team-delegates'
+import { reactivateFormerMember } from '../../common/utils/team-former-members'
 import * as admin from 'firebase-admin'
 import { DatabaseService } from '../../db/database.service'
 import { StorageService } from '../../common/services/storage.service'
@@ -22,6 +23,7 @@ import {
   follows,
   fines,
   teamMembers,
+  teamFormerMembers,
   matchDelegates,
 } from '../../db/schema'
 
@@ -425,6 +427,7 @@ export class MobilePlayersService {
             .insert(teamMembers)
             .values({ teamId: row.teamId, playerUid: uid, playerName, role: 'player', isPlayer: true })
             .onConflictDoNothing({ target: [teamMembers.teamId, teamMembers.playerUid] })
+          await reactivateFormerMember(this.db, row.teamId, uid)
         } catch (err) {
           console.error('[claimPendingPlayerRows] add member (best-effort):', err)
         }
@@ -474,7 +477,10 @@ export class MobilePlayersService {
               target: [teamMembers.teamId, teamMembers.playerUid],
               set: { role: 'director' },
             })
+          await reactivateFormerMember(tx, team.id, uid)
 
+          // Cambio de delegado (el anterior suele ser el placeholder con el que el
+          // panel creó el equipo): no es una baja de jugador, no va a exjugadores.
           if (oldDirectorUid && oldDirectorUid !== uid) {
             await tx
               .delete(teamMembers)
@@ -882,6 +888,7 @@ export class MobilePlayersService {
         playerName: fullName,
         role: 'player',
       })
+      await reactivateFormerMember(this.db, reg.teamId, uid)
     }
   }
 
@@ -1075,6 +1082,8 @@ export class MobilePlayersService {
       .delete(follows)
       .where(or(eq(follows.followerUid, uid), eq(follows.followedUid, uid)))
     await this.db.delete(teamMembers).where(eq(teamMembers.playerUid, uid))
+    // Cuenta borrada: tampoco debe seguir apareciendo como exjugador.
+    await this.db.delete(teamFormerMembers).where(eq(teamFormerMembers.playerUid, uid))
     await this.db.delete(playerProfiles).where(eq(playerProfiles.uid, uid))
 
     return { deleted: true }

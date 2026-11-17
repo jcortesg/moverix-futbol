@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common'
 import { and, asc, eq, isNull } from 'drizzle-orm'
 import { isTeamDelegate } from '../../common/utils/team-delegates'
+import { reactivateFormerMember } from '../../common/utils/team-former-members'
 import { DatabaseService } from '../../db/database.service'
 import { StorageService } from '../../common/services/storage.service'
 import {
@@ -214,6 +215,7 @@ export class PublicTeamsService {
         playerName: dto.playerName,
         role: 'player',
       })
+      await reactivateFormerMember(this.db, team.id, uid)
     }
 
     // 3. If editionSlug provided, also add to tournament roster

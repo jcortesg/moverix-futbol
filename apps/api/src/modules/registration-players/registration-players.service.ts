@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, Injectable, NotFoundException }
 import { and, asc, eq, isNotNull, isNull } from 'drizzle-orm'
 import { DatabaseService } from '../../db/database.service'
 import { StorageService } from '../../common/services/storage.service'
+import { reactivateFormerMember } from '../../common/utils/team-former-members'
 import { playerProfiles, registrationPlayers, registrations, teams, teamMembers } from '../../db/schema'
 import { CreateRegistrationPlayerDto } from './dto/create-registration-player.dto'
 import { UpdateRegistrationPlayerDto } from './dto/update-registration-player.dto'
@@ -102,6 +103,7 @@ export class RegistrationPlayersService {
           target: [teamMembers.teamId, teamMembers.playerUid],
           set: { isPlayer: true },
         })
+      await reactivateFormerMember(this.db, reg.teamId, playerUid)
     } catch {
       // best-effort — don't fail the registration if sync fails
     }
