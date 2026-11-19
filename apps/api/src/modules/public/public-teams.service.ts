@@ -7,6 +7,7 @@ import {
 import { and, asc, eq, isNull } from 'drizzle-orm'
 import { isTeamDelegate } from '../../common/utils/team-delegates'
 import { reactivateFormerMember } from '../../common/utils/team-former-members'
+import { assertRosterCapacity, rosterIsFull } from '../../common/utils/roster-capacity'
 import { DatabaseService } from '../../db/database.service'
 import { StorageService } from '../../common/services/storage.service'
 import {
@@ -255,7 +256,7 @@ export class PublicTeamsService {
           ),
         )
 
-      if (!existingPlayer) {
+      if (!existingPlayer && !(await rosterIsFull(this.db, reg.id))) {
         await this.db.insert(registrationPlayers).values({
           registrationId: reg.id,
           playerUid: uid,
@@ -343,6 +344,7 @@ export class PublicTeamsService {
     },
   ) {
     await this.verifyDirector(uid, dto.registrationId)
+    await assertRosterCapacity(this.db, dto.registrationId)
     const [row] = await this.db.insert(registrationPlayers).values({
       registrationId: dto.registrationId,
       playerUid: `manual-${Date.now()}`,

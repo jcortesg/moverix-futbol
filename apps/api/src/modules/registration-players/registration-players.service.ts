@@ -3,6 +3,7 @@ import { and, asc, eq, isNotNull, isNull } from 'drizzle-orm'
 import { DatabaseService } from '../../db/database.service'
 import { StorageService } from '../../common/services/storage.service'
 import { reactivateFormerMember } from '../../common/utils/team-former-members'
+import { assertRosterCapacity } from '../../common/utils/roster-capacity'
 import { playerProfiles, registrationPlayers, registrations, teams, teamMembers } from '../../db/schema'
 import { CreateRegistrationPlayerDto } from './dto/create-registration-player.dto'
 import { UpdateRegistrationPlayerDto } from './dto/update-registration-player.dto'
@@ -29,6 +30,7 @@ export class RegistrationPlayersService {
   }
 
   async create(dto: CreateRegistrationPlayerDto) {
+    await assertRosterCapacity(this.db, dto.registrationId)
     try {
       // Si el jugador ya estuvo en esta plantilla y fue dado de baja, se revive
       // esa fila en vez de crear una nueva: si no, la persona aparecería a la vez
@@ -213,7 +215,8 @@ export class RegistrationPlayersService {
 
   /** Reactiva a un jugador dado de baja. */
   async restore(id: string) {
-    await this.findOne(id)
+    const current = await this.findOne(id)
+    if (current.removedAt) await assertRosterCapacity(this.db, current.registrationId)
     const [updated] = await this.db
       .update(registrationPlayers)
       .set({ removedAt: null, removedBy: null })

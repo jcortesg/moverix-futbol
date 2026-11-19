@@ -20,6 +20,7 @@ import { MobileNotificationsService } from './mobile-notifications.service'
 import { computeFinalPosition, type FinalPosition } from './team-final-position'
 import { isTeamDelegate } from '../../common/utils/team-delegates'
 import { reactivateFormerMember, retireTeamMember } from '../../common/utils/team-former-members'
+import { assertRosterCapacity, rosterIsFull } from '../../common/utils/roster-capacity'
 
 const ALLOWED_DOC_MIME = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'image/heic']
 const ALLOWED_IMAGE_MIME = ['image/jpeg', 'image/png', 'image/webp', 'image/heic']
@@ -352,7 +353,9 @@ export class MobileTeamsService {
       }
     }
 
-    if (rosterOpen) {
+    // Nómina llena: se une al equipo, pero no entra a la nómina del torneo.
+    const rosterFull = rosterOpen && (await rosterIsFull(this.db, reg.registrationId))
+    if (rosterOpen && !rosterFull) {
       const history = await this.loadPlayerHistory([uid], reg.teamId)
       const dedupe = await this.rosterUniqueGuard(reg.registrationId)
       const row = this.buildRosterRow(
@@ -376,6 +379,8 @@ export class MobileTeamsService {
 
     const message = !rosterOpen
       ? `Te uniste a ${reg.teamName}, pero la nómina de ${reg.editionName} está cerrada.`
+      : rosterFull
+        ? `Te uniste a ${reg.teamName}, pero la nómina de ${reg.editionName} ya está completa. Habla con tu delegado.`
       : addedToRegistration
         ? `¡Listo! Entraste a la nómina de ${reg.teamName} en ${reg.editionName}.`
         : `Ya estabas en la nómina de ${reg.editionName}.`
@@ -1268,6 +1273,7 @@ export class MobileTeamsService {
     // Precarga: perfil + la ficha más completa del jugador en inscripciones
     // anteriores (fecha de nacimiento, EPS, correo, contacto de emergencia,
     // foto y documento). Así el delegado no vuelve a pedir todo cada torneo.
+    await assertRosterCapacity(this.db, registrationId, toInsert.length)
     const history = await this.loadPlayerHistory(toInsert.map((m) => m.playerUid), reg.teamId)
     const dedupe = await this.rosterUniqueGuard(registrationId)
 
@@ -1449,6 +1455,7 @@ export class MobileTeamsService {
   ) {
     const reg = await this.registrationForDelegate(registrationId, actorUid)
     await this.assertRosterOpen(registrationId)
+    await assertRosterCapacity(this.db, registrationId)
 
     const firstName = (input.firstName ?? '').trim()
     const lastName = (input.lastName ?? '').trim() || null
