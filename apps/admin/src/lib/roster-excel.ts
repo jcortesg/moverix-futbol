@@ -1,11 +1,12 @@
 import * as XLSX from 'xlsx'
-import { PLAYER_POSITION_LABEL, type RegistrationPlayerFromApi } from './registration-players'
+import { PLAYER_POSITION_LABEL, type RegistrationPlayerFromApi, type TeamDelegate } from './registration-players'
 
 export type RosterExcelInput = {
   editionName: string
   teamName: string
   groupName?: string | null
   players: RegistrationPlayerFromApi[]
+  delegates?: TeamDelegate[]
 }
 
 function fmtDate(d: string | null): string {
@@ -34,6 +35,7 @@ export function downloadRosterExcel(input: RosterExcelInput): void {
     return (a.playerName || '').localeCompare(b.playerName || '')
   })
 
+  const delegateRole = new Map((input.delegates ?? []).map((d) => [d.uid, d.role === 'principal' ? 'Principal' : 'Sí']))
   const data = rows.map((p) => ({
     '#': p.jerseyNumber ?? '',
     Jugador: [p.firstName, p.lastName].filter(Boolean).join(' ').trim() || p.playerName,
@@ -41,10 +43,11 @@ export function downloadRosterExcel(input: RosterExcelInput): void {
     Posición: p.position ? PLAYER_POSITION_LABEL[p.position] : '',
     'F. Nacimiento': fmtDate(p.birthDate),
     Capitán: p.isCaptain ? 'Sí' : '',
+    Delegado: delegateRole.get(p.playerUid) ?? '',
   }))
 
   const ws = XLSX.utils.json_to_sheet(data, {
-    header: ['#', 'Jugador', 'Documento', 'Posición', 'F. Nacimiento', 'Capitán'],
+    header: ['#', 'Jugador', 'Documento', 'Posición', 'F. Nacimiento', 'Capitán', 'Delegado'],
   })
   // Anchos de columna
   ws['!cols'] = [
@@ -54,6 +57,7 @@ export function downloadRosterExcel(input: RosterExcelInput): void {
     { wch: 18 },  // Posición
     { wch: 14 },  // F. Nacimiento
     { wch: 8 },   // Capitán
+    { wch: 10 },  // Delegado
   ]
 
   const wb = XLSX.utils.book_new()

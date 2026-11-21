@@ -12,8 +12,10 @@ import {
   removeRosterPlayer,
   restoreRosterPlayer,
   addDirectorAsPlayer,
+  getTeamDelegates,
   PLAYER_POSITION_LABEL,
   type RegistrationPlayerFromApi,
+  type TeamDelegate,
 } from '@/lib/registration-players'
 import { ROSTER_PLAYER_FIELDS } from '@/lib/leagues'
 import { getPlayerStatsByTeam, type PlayerStatFromApi } from '@/lib/player-stats'
@@ -77,6 +79,8 @@ export function RosterTab({
   const [importing, setImporting] = useState(false)
   const [addingDirector, setAddingDirector] = useState(false)
   const [downloadingPdf, setDownloadingPdf] = useState(false)
+  const [delegates, setDelegates] = useState<TeamDelegate[]>([])
+  const delegateByUid = new Map(delegates.map((d) => [d.uid, d]))
 
   async function handleDownloadPdf() {
     // La planilla es el documento oficial del partido: los dados de baja no van.
@@ -91,6 +95,7 @@ export function RosterTab({
         groupName,
         city,
         players: activos,
+        delegates,
       })
     } catch (e) {
       setError(e instanceof Error ? e.message : 'No se pudo generar el PDF')
@@ -108,6 +113,7 @@ export function RosterTab({
         teamName: teamName ?? 'Equipo',
         groupName,
         players: activos,
+        delegates,
       })
     } catch (e) {
       setError(e instanceof Error ? e.message : 'No se pudo generar el Excel')
@@ -117,6 +123,8 @@ export function RosterTab({
   useEffect(() => {
     const promises: Promise<void>[] = [
       getRosterByRegistration(registrationId).then(setPlayers),
+      // Best-effort: si falla, la planilla se ve igual sin la marca de delegado.
+      getTeamDelegates(registrationId).then(setDelegates).catch(() => setDelegates([])),
     ]
     if (editionId && teamId) {
       promises.push(
@@ -265,6 +273,25 @@ export function RosterTab({
             {players.length} {players.length === 1 ? 'jugador' : 'jugadores'}
             {players.some((p) => p.isCaptain) && ' · Capitán asignado'}
           </p>
+          {delegates.length > 0 && (
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                {delegates.length === 1 ? 'Delegado' : 'Delegados'}
+              </span>
+              {delegates.map((d) => (
+                <span
+                  key={d.uid}
+                  className="inline-flex items-center gap-1 rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[11px] font-semibold text-sky-800"
+                  title={d.role === 'principal' ? 'Delegado principal' : 'Delegado adicional'}
+                >
+                  <ShieldCheck size={11} />
+                  {d.name}
+                  {d.role === 'principal' && <span className="text-[9px] font-bold uppercase text-sky-600">· principal</span>}
+                  {!d.inRoster && <span className="text-[9px] font-medium text-slate-500">· no juega</span>}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -347,6 +374,7 @@ export function RosterTab({
                   player={p}
                   playerStats={stats.get(p.playerUid)}
                   missing={missingFields(p, requiredPlayerFields)}
+                  delegate={delegateByUid.get(p.playerUid)}
                   onEdit={() => setEditing(p)}
                   onRemove={() => handleRemove(p.id)}
                   onToggleCaptain={() => toggleCaptain(p)}
@@ -365,6 +393,7 @@ export function RosterTab({
                       player={p}
                       playerStats={stats.get(p.playerUid)}
                       missing={missingFields(p, requiredPlayerFields)}
+                      delegate={delegateByUid.get(p.playerUid)}
                       onEdit={() => setEditing(p)}
                       onRemove={() => handleRestore(p.id)}
                       onToggleCaptain={() => toggleCaptain(p)}
@@ -406,9 +435,11 @@ export function RosterTab({
 // ─── Row ─────────────────────────────────────────────────────────────────────
 
 function PlayerRow({
-  player, playerStats, missing = [], onEdit, onRemove, onToggleCaptain,
+  player, playerStats, missing = [], delegate, onEdit, onRemove, onToggleCaptain,
 }: {
   player: RegistrationPlayerFromApi
+  /** Si este jugador es delegado del equipo. */
+  delegate?: TeamDelegate
   playerStats?: PlayerStatFromApi
   /** Campos obligatorios que le faltan a este jugador. */
   missing?: string[]
@@ -453,8 +484,16 @@ function PlayerRow({
           onClick={onEdit}
           className="text-left min-w-0 max-w-full"
         >
-          <p className="text-sm font-semibold text-slate-900 truncate hover:text-green-700 transition-colors">
-            {player.playerName}
+          <p className="flex items-center gap-1.5 text-sm font-semibold text-slate-900 min-w-0 hover:text-green-700 transition-colors">
+            <span className="truncate">{player.playerName}</span>
+            {delegate && (
+              <span
+                className="shrink-0 inline-flex items-center gap-0.5 rounded-full border border-sky-200 bg-sky-50 px-1.5 py-px text-[9px] font-bold uppercase tracking-wide text-sky-700"
+                title={delegate.role === 'principal' ? 'Delegado principal del equipo' : 'Delegado adicional del equipo'}
+              >
+                <ShieldCheck size={10} /> Delegado
+              </span>
+            )}
           </p>
           {player.docNumber && (
             <p className="text-[10px] text-slate-400 font-mono truncate">CC {player.docNumber}</p>

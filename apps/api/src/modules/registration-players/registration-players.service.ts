@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common'
-import { and, asc, eq, isNotNull, isNull } from 'drizzle-orm'
+import { and, asc, eq, inArray, isNotNull, isNull } from 'drizzle-orm'
 import { DatabaseService } from '../../db/database.service'
 import { StorageService } from '../../common/services/storage.service'
 import { reactivateFormerMember } from '../../common/utils/team-former-members'
@@ -177,6 +177,57 @@ export class RegistrationPlayersService {
           : and(eq(registrationPlayers.registrationId, registrationId), isNull(registrationPlayers.removedAt)),
       )
       .orderBy(asc(registrationPlayers.jerseyNumber), asc(registrationPlayers.playerName))
+  }
+
+  /**
+   * Delegados del equipo de una inscripción (principal + adicionales), para
+   * marcarlos en la planilla del panel. `inRoster` dice si además juegan.
+   */
+  async findDelegates(registrationId: string) {
+    const [reg] = await this.db
+      .select({ teamId: registrations.teamId, directorUid: teams.directorUid })
+      .from(registrations)
+      .innerJoin(teams, eq(teams.id, registrations.teamId))
+      .where(eq(registrations.id, registrationId))
+    if (!reg) throw new NotFoundException('Inscripción no encontrada')
+
+    const extra = await this.db
+      .select({ uid: teamMembers.playerUid, name: teamMembers.playerName })
+      .from(teamMembers)
+      .where(and(eq(teamMembers.teamId, reg.teamId), eq(teamMembers.role, 'director')))
+
+    const uids = [...new Set([reg.directorUid, ...extra.map((e) => e.uid)].filter((u): u is string => !!u))]
+    if (uids.length === 0) return []
+
+    const profiles = await this.db
+      .select({ uid: playerProfiles.uid, fullName: playerProfiles.fullName, phone: playerProfiles.phone })
+      .from(playerProfiles)
+      .where(inArray(playerProfiles.uid, uids))
+    const roster = await this.db
+      .select({ uid: registrationPlayers.playerUid, name: registrationPlayers.playerName, phone: registrationPlayers.phone })
+      .from(registrationPlayers)
+      .where(and(eq(registrationPlayers.registrationId, registrationId), isNull(registrationPlayers.removedAt), inArray(registrationPlayers.playerUid, uids)))
+
+    const byProfile = new Map(profiles.map((p) => [p.uid, p]))
+    const byRoster = new Map(roster.map((r) => [r.uid, r]))
+    const byMember = new Map(extra.map((e) => [e.uid, e.name]))
+
+    return uids
+      .map((uid) => {
+        const r = byRoster.get(uid)
+        const p = byProfile.get(uid)
+        const name = p?.fullName || r?.name || byMember.get(uid) || null
+        return {
+          uid,
+          name,
+          phone: r?.phone || p?.phone || null,
+          role: uid === reg.directorUid ? ('principal' as const) : ('adicional' as const),
+          inRoster: !!r,
+        }
+      })
+      // Cuentas borradas sin perfil ni ficha (p. ej. un dueño viejo): no se muestran.
+      .filter((d) => d.name)
+      .sort((a, b) => (a.role === b.role ? 0 : a.role === 'principal' ? -1 : 1))
   }
 
   async findOne(id: string) {

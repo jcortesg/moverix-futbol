@@ -40,6 +40,17 @@ export class RegistrationPlayersController {
     return this.service.findByRegistration(registrationId, includeRemoved === 'true')
   }
 
+  /** Delegados del equipo (principal y adicionales) para marcarlos en la planilla. */
+  @Get('delegates')
+  @ApiQuery({ name: 'registrationId', required: true })
+  async findDelegates(
+    @Query('registrationId', ParseUUIDPipe) registrationId: string,
+    @Request() req: { user: { uid: string } },
+  ) {
+    await this.ownership.verifyRegistrationReadAccess(req.user.uid, registrationId)
+    return this.service.findDelegates(registrationId)
+  }
+
   /** Agrega al delegado del equipo a la plantilla como jugador (rol dual). */
   @Post('director')
   async addDirectorAsPlayer(

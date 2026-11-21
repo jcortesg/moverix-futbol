@@ -1,6 +1,6 @@
 import { jsPDF } from 'jspdf'
 import autoTable from 'jspdf-autotable'
-import { PLAYER_POSITION_LABEL, type RegistrationPlayerFromApi } from './registration-players'
+import { PLAYER_POSITION_LABEL, type RegistrationPlayerFromApi, type TeamDelegate } from './registration-players'
 
 export type RosterPdfInput = {
   editionName: string
@@ -9,6 +9,8 @@ export type RosterPdfInput = {
   groupName?: string | null
   city?: string | null
   players: RegistrationPlayerFromApi[]
+  /** Delegados del equipo: se listan en el encabezado y se marcan (D) en la tabla. */
+  delegates?: TeamDelegate[]
 }
 
 /** Carga una imagen remota y la convierte a dataURL (best-effort; null si CORS/falla). */
@@ -93,9 +95,22 @@ export async function downloadRosterPdf(input: RosterPdfInput): Promise<void> {
     tx,
     y0 + 46,
   )
+  const delegates = input.delegates ?? []
+  if (delegates.length > 0) {
+    doc.setTextColor(0)
+    doc.setFont('helvetica', 'bold')
+    const label = delegates.length === 1 ? 'Delegado: ' : 'Delegados: '
+    doc.text(label, tx, y0 + 60)
+    doc.setFont('helvetica', 'normal')
+    const list = delegates
+      .map((d) => `${d.name}${d.phone ? ` (${d.phone})` : ''}${d.inRoster ? '' : ' · no juega'}`)
+      .join('   ·   ')
+    doc.text(list, tx + doc.getTextWidth(label), y0 + 60, { maxWidth: 515 - logoOffset - doc.getTextWidth(label) })
+  }
   doc.setTextColor(0)
 
-  const startY = Math.max(y0 + logoOffset, y0 + 60)
+  const startY = Math.max(y0 + logoOffset, y0 + (delegates.length > 0 ? 76 : 60))
+  const delegateUids = new Set(delegates.map((d) => d.uid))
 
   // Orden: por dorsal (nulos al final), luego nombre
   const rows = [...input.players].sort((a, b) => {
@@ -110,7 +125,7 @@ export async function downloadRosterPdf(input: RosterPdfInput): Promise<void> {
     const pos = p.position ? PLAYER_POSITION_LABEL[p.position] : '—'
     return [
       p.jerseyNumber != null ? String(p.jerseyNumber) : '—',
-      name + (p.isCaptain ? '  (C)' : ''),
+      name + (p.isCaptain ? '  (C)' : '') + (delegateUids.has(p.playerUid) ? '  (D)' : ''),
       p.docNumber || '—',
       pos,
       fmtDate(p.birthDate),

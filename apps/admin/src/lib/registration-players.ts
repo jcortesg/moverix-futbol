@@ -70,6 +70,20 @@ export type UpdateRegistrationPlayerDto = Partial<
   Omit<CreateRegistrationPlayerDto, 'registrationId' | 'playerUid'>
 >
 
+/** Delegado del equipo (principal o adicional); `inRoster` = además juega en esta nómina. */
+export type TeamDelegate = {
+  uid: string
+  name: string
+  phone: string | null
+  role: 'principal' | 'adicional'
+  inRoster: boolean
+}
+
+export async function getTeamDelegates(registrationId: string): Promise<TeamDelegate[]> {
+  const { data } = await api.get<TeamDelegate[]>('/registration-players/delegates', { params: { registrationId } })
+  return data
+}
+
 export async function getRosterByRegistration(registrationId: string): Promise<RegistrationPlayerFromApi[]> {
   // El panel lista activos y retirados (sección de bajas + restaurar).
   const { data } = await api.get<RegistrationPlayerFromApi[]>('/registration-players', {
