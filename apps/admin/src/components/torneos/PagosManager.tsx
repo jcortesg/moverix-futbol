@@ -31,7 +31,7 @@ import { getMatchesByEdition, type MatchFromApi } from '@/lib/matches'
 import { getEdition, type EditionFromApi } from '@/lib/leagues'
 import { getPlayerStatsByEdition } from '@/lib/player-stats'
 import { getEventsByMatch, type MatchEventFromApi } from '@/lib/match-events'
-import { downloadFinesExcel, type CardStat, type CardDetail } from '@/lib/fines-excel'
+import { downloadFinesExcel, resolveFineTariffs, tariffRows, type CardStat, type CardDetail, type FineTariffs } from '@/lib/fines-excel'
 import { Field, inputCls } from '@/components/ui/form'
 
 type Tab = 'registrations' | 'fines' | 'all'
@@ -172,6 +172,8 @@ export function PagosManager({
       {tab === 'fines' && (
         <FinesTab
           fines={fines}
+          tariffs={resolveFineTariffs(edition.fineDefaults)}
+          editHref={`/torneos/edicion/${editionId}`}
           currency={currency}
           onCreate={() => setCreatingFine(true)}
           onEdit={setEditingFine}
@@ -211,6 +213,8 @@ export function PagosManager({
               for (const e of evs) {
                 if (e.eventType !== 'yellow_card' && e.eventType !== 'red_card') continue
                 cardDetails.push({
+                  matchId: m.id,
+                  playerUid: e.playerUid,
                   playerName: e.playerName ?? '(jugador)',
                   teamName: e.teamId === m.homeTeamId ? home : e.teamId === m.awayTeamId ? away : '',
                   type: e.eventType,
@@ -227,6 +231,7 @@ export function PagosManager({
               fines,
               cards,
               cardDetails,
+              tariffs: resolveFineTariffs(edition?.fineDefaults),
             })
           }}
         />
@@ -501,9 +506,11 @@ function PaidStatusPill({ status }: { status: 'paid' | 'partial' | 'pending' }) 
 // ─── Tab: Fines ──────────────────────────────────────────────────────────────
 
 function FinesTab({
-  fines, currency, onCreate, onEdit, onDelete, onStatusChange, onDownload,
+  fines, tariffs, editHref, currency, onCreate, onEdit, onDelete, onStatusChange, onDownload,
 }: {
   fines: FineFromApi[]
+  tariffs: FineTariffs
+  editHref: string
   currency: string
   onCreate: () => void
   onEdit: (f: FineFromApi) => void
@@ -520,7 +527,7 @@ function FinesTab({
           disabled={downloading}
           className="flex items-center gap-2 px-3 py-1.5 bg-white border border-slate-200 text-slate-700 text-xs font-bold rounded-xl hover:bg-slate-50 transition-all shadow-sm disabled:opacity-50"
         >
-          <Download size={12} /> {downloading ? 'Generando…' : 'Descargar Excel'}
+          <Download size={12} /> {downloading ? 'Generando…' : 'Informe de tarjetas y multas'}
         </button>
         <button
           onClick={onCreate}
@@ -528,6 +535,30 @@ function FinesTab({
         >
           <Plus size={12} /> Nueva multa
         </button>
+      </div>
+
+      {/* Tabla de multas y sanciones vigente del torneo */}
+      <div className="mb-4 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
+          <div>
+            <h4 className="text-sm font-bold text-slate-900">Tabla de multas y sanciones</h4>
+            <p className="text-[11px] text-slate-500">Cada tarjeta que registra el árbitro genera su multa con estos valores.</p>
+          </div>
+          <Link href={editHref} className="text-xs font-semibold text-green-700 hover:underline">Editar valores</Link>
+        </div>
+        <table className="w-full">
+          <tbody className="divide-y divide-slate-100">
+            {tariffRows(tariffs).map((r) => (
+              <tr key={r.concepto}>
+                <td className="px-4 py-2 text-sm text-slate-700">{r.concepto}</td>
+                <td className="px-4 py-2 text-right tabular-nums text-sm font-semibold text-slate-900 w-32">
+                  {r.multa > 0 ? fmtMoney(r.multa, currency) : <span className="text-slate-400 font-normal">Sin multa</span>}
+                </td>
+                <td className="px-4 py-2 text-xs text-slate-600 w-56">{r.sancion}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
 
       {fines.length === 0 ? (

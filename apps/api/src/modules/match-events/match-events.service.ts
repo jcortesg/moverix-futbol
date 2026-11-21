@@ -1,5 +1,5 @@
 import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common'
-import { and, asc, eq, sql } from 'drizzle-orm'
+import { and, asc, eq, inArray, sql } from 'drizzle-orm'
 import { DatabaseService } from '../../db/database.service'
 import { editions, fines, matches, matchdays, matchEvents } from '../../db/schema'
 import { PlayerStatsService } from '../player-stats/player-stats.service'
@@ -244,6 +244,32 @@ export class MatchEventsService {
     })
   }
 
+  /**
+   * Quita las multas automáticas PENDIENTES de un jugador en un partido cuando ya
+   * no tiene la tarjeta que las generó (se borró o se cambió de tipo/jugador).
+   * Las pagadas o anuladas no se tocan: ya son decisión del organizador.
+   */
+  private async dropOrphanCardFines(matchId: string, playerUid: string) {
+    const rows = await this.db
+      .select({ eventType: matchEvents.eventType })
+      .from(matchEvents)
+      .where(and(eq(matchEvents.matchId, matchId), eq(matchEvents.playerUid, playerUid)))
+    const hasRed = rows.some((r) => r.eventType === 'red_card')
+    const hasYellow = rows.some((r) => r.eventType === 'yellow_card')
+    const drop: Array<'red_card' | 'yellow_card' | 'yellow_card_accumulation'> = []
+    if (!hasRed) drop.push('red_card')
+    if (!hasYellow) drop.push('yellow_card', 'yellow_card_accumulation')
+    if (drop.length === 0) return
+    await this.db
+      .delete(fines)
+      .where(and(
+        eq(fines.matchId, matchId),
+        eq(fines.playerUid, playerUid),
+        eq(fines.status, 'pending'),
+        inArray(fines.concept, drop),
+      ))
+  }
+
   async findByMatch(matchId: string) {
     return this.db
       .select()
@@ -266,6 +292,31 @@ export class MatchEventsService {
       .where(eq(matchEvents.id, id))
       .returning()
 
+    // Si cambió el tipo de tarjeta o el jugador, la multa automática debe seguirlo:
+    // se quita la del evento viejo (si quedó sin tarjeta) y se crea la del nuevo.
+    const isCard = (t?: string | null) => t === 'yellow_card' || t === 'red_card'
+    if (
+      (isCard(existing.eventType) || isCard(updated.eventType)) &&
+      (existing.eventType !== updated.eventType || existing.playerUid !== updated.playerUid)
+    ) {
+      try {
+        if (isCard(existing.eventType) && existing.playerUid) {
+          await this.dropOrphanCardFines(existing.matchId, existing.playerUid)
+        }
+        if (isCard(updated.eventType) && updated.playerUid) {
+          await this.handleCardFine({
+            matchId: updated.matchId,
+            teamId: updated.teamId,
+            playerUid: updated.playerUid,
+            playerName: updated.playerName ?? undefined,
+            eventType: updated.eventType,
+          } as CreateMatchEventDto)
+        }
+      } catch (err) {
+        this.logger.warn(`Card fine sync failed for event ${id}: ${err}`)
+      }
+    }
+
     try { await this.playerStatsService.recomputeMatch(existing.matchId) } catch { /* non-fatal */ }
 
     return updated
@@ -274,6 +325,13 @@ export class MatchEventsService {
   async remove(id: string) {
     const existing = await this.findOne(id)
     await this.db.delete(matchEvents).where(eq(matchEvents.id, id))
+
+    // Borrar la tarjeta borra su multa automática (si sigue pendiente).
+    if ((existing.eventType === 'yellow_card' || existing.eventType === 'red_card') && existing.playerUid) {
+      try { await this.dropOrphanCardFines(existing.matchId, existing.playerUid) } catch (err) {
+        this.logger.warn(`Card fine cleanup failed for event ${id}: ${err}`)
+      }
+    }
 
     try { await this.playerStatsService.recomputeMatch(existing.matchId) } catch { /* non-fatal */ }
 
