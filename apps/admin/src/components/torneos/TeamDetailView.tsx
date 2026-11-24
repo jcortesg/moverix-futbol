@@ -6,7 +6,7 @@ import {
   ChevronLeft, Loader2, AlertCircle, Shield, Upload,
   Users, Calendar, DollarSign, Ban, BarChart2,
   CheckCircle2, XCircle, UserMinus, DollarSign as DollarIcon,
-  Pencil, Save, X,
+  Pencil, Save, X, Lock, Unlock,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import {
@@ -37,8 +37,8 @@ const TABS = [
 type TabKey = typeof TABS[number]['key']
 
 const STATUS_STYLE: Record<RegistrationStatus, { label: string; bg: string; text: string; dot: string }> = {
-  draft:     { label: 'Borrador',   bg: 'bg-slate-50 border-slate-200',  text: 'text-slate-600',  dot: 'bg-slate-400' },
-  pending:   { label: 'Pendiente',  bg: 'bg-amber-50 border-amber-200',  text: 'text-amber-700',  dot: 'bg-amber-500' },
+  draft:     { label: 'Sin enviar',   bg: 'bg-slate-50 border-slate-200',  text: 'text-slate-600',  dot: 'bg-slate-400' },
+  pending:   { label: 'Enviada',  bg: 'bg-amber-50 border-amber-200',  text: 'text-amber-700',  dot: 'bg-amber-500' },
   approved:  { label: 'Aprobado',   bg: 'bg-green-50 border-green-200',  text: 'text-green-700',  dot: 'bg-green-500' },
   rejected:  { label: 'Rechazado',  bg: 'bg-red-50 border-red-200',      text: 'text-red-700',    dot: 'bg-red-500' },
   withdrawn: { label: 'Retirado',   bg: 'bg-slate-50 border-slate-200',  text: 'text-slate-500',  dot: 'bg-slate-400' },
@@ -70,6 +70,27 @@ export function TeamDetailView({ editionId, registrationId }: { editionId: strin
     setReg({ ...reg, ...updated })
   }
 
+  const [rosterBusy, setRosterBusy] = useState(false)
+  const [rosterError, setRosterError] = useState<string | null>(null)
+
+  /** Abre o cierra la nómina de ESTE equipo. Si queda igual que el campeonato, vuelve a heredar. */
+  async function toggleRoster() {
+    if (!reg || !edition) return
+    const global = !!edition.rostersLocked
+    const locked = reg.rosterLocked ?? global
+    const next: boolean | null = locked ? (global ? false : null) : (global ? null : true)
+    setRosterBusy(true)
+    setRosterError(null)
+    try {
+      const updated = await updateRegistration(reg.id, { rosterLocked: next })
+      setReg({ ...reg, rosterLocked: updated.rosterLocked })
+    } catch {
+      setRosterError('No se pudo cambiar. Intenta de nuevo.')
+    } finally {
+      setRosterBusy(false)
+    }
+  }
+
   async function handleMarkPaid() {
     if (!reg) return
     const updated = await markRegistrationPaid(reg.id)
@@ -94,6 +115,9 @@ export function TeamDetailView({ editionId, registrationId }: { editionId: strin
   }
 
   const status = STATUS_STYLE[reg.status]
+  const rostersLockedGlobally = !!edition.rostersLocked
+  const rosterLocked = reg.rosterLocked ?? rostersLockedGlobally
+  const rosterException = reg.rosterLocked !== null && reg.rosterLocked !== rostersLockedGlobally
   const group = groups.find((g) => g.id === reg.groupId)
 
   return (
@@ -119,17 +143,44 @@ export function TeamDetailView({ editionId, registrationId }: { editionId: strin
       >
         {/* Right column: status metrics */}
         <div className="flex flex-wrap items-center gap-2 sm:gap-4 justify-end">
+          {/* Nómina: abierta = el delegado puede agregar y editar jugadores, aunque ya la haya enviado */}
+          <div className="flex flex-col items-end gap-1">
+            <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Nómina</p>
+            <span className={clsx(
+              'inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-bold border',
+              rosterLocked ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-emerald-50 border-emerald-200 text-emerald-700',
+            )}>
+              {rosterLocked ? <Lock size={10} /> : <Unlock size={10} />}
+              {rosterLocked ? 'Cerrada' : 'Abierta'}
+              {rosterException && <span className="font-medium opacity-70">· solo este equipo</span>}
+            </span>
+            <button
+              onClick={toggleRoster}
+              disabled={rosterBusy}
+              className="inline-flex items-center gap-1 text-[10px] font-bold text-slate-500 hover:text-slate-900 transition-colors disabled:opacity-50"
+              title={rosterLocked
+                ? 'El delegado podrá volver a agregar, quitar y editar jugadores desde la app'
+                : 'El delegado ya no podrá cambiar la nómina'}
+            >
+              {rosterBusy && <Loader2 size={10} className="animate-spin" />}
+              {rosterLocked ? 'Reabrir nómina' : 'Cerrar nómina'}
+            </button>
+            {rosterError && <span className="text-[10px] text-red-600">{rosterError}</span>}
+          </div>
+
+          <div className="h-10 w-px bg-slate-200" />
+
           {/* Status */}
           <div className="flex flex-col items-end gap-1">
-            <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Estado</p>
+            <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Inscripción</p>
             <span className={clsx('inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-bold border', status.bg, status.text)}>
               <span className={clsx('w-1.5 h-1.5 rounded-full', status.dot)} />
               {status.label}
             </span>
             <div className="flex items-center gap-1">
               {reg.status === 'draft' && (
-                <span className="text-[10px] text-slate-400 italic mr-1" title="El equipo aún no ha enviado su inscripción">
-                  Esperando plantilla del equipo
+                <span className="text-[10px] text-slate-400 italic mr-1" title="El delegado aún no envía la nómina desde la app; igual puede seguir agregando jugadores">
+                  El delegado aún no la envía
                 </span>
               )}
               {reg.status !== 'approved' && reg.status !== 'draft' && (
@@ -212,7 +263,7 @@ export function TeamDetailView({ editionId, registrationId }: { editionId: strin
 
           {/* Seed */}
           <div className="flex flex-col items-end gap-1">
-            <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Seed</p>
+            <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest" title="Orden para sortear grupos y llaves">Cabeza de serie</p>
             <SeedEditor value={reg.seedRank} onChange={(v) => patchRegistration({ seedRank: v ?? undefined })} />
           </div>
         </div>

@@ -88,7 +88,7 @@ Nginx hace reverse proxy a los URLs internos de Cloud Run con SSL via Let's Encr
 ### 1. Build de imágenes (Cloud Build)
 
 ```bash
-cd "moverix futbol"
+cd "moverix futbol/plataforma"
 
 # API
 gcloud builds submit --config apps/api/cloudbuild.yaml --project moverix

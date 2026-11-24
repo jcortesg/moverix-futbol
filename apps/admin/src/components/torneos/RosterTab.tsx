@@ -359,11 +359,8 @@ export function RosterTab({
                 <th className="text-center text-[10px] font-bold text-slate-500 uppercase tracking-widest px-4 py-3 w-16" title="Rojas">
                   <span className="inline-block w-3 h-4 rounded-sm bg-red-500 align-middle" />
                 </th>
-                <th className="text-center text-[10px] font-bold text-slate-500 uppercase tracking-widest px-4 py-3 w-16" title="Walkovers / No presentados">WO</th>
-                <th className="text-center text-[10px] font-bold text-slate-500 uppercase tracking-widest px-4 py-3 w-20">Multas</th>
-                <th className="text-left text-[10px] font-bold text-slate-500 uppercase tracking-widest px-4 py-3 w-32">Datos</th>
-                <th className="text-left text-[10px] font-bold text-slate-500 uppercase tracking-widest px-4 py-3 w-28">Estado</th>
                 <th className="text-center text-[10px] font-bold text-slate-500 uppercase tracking-widest px-4 py-3 w-16">Cap.</th>
+                <th className="text-left text-[10px] font-bold text-slate-500 uppercase tracking-widest px-4 py-3 w-32">Datos</th>
                 <th className="text-right text-[10px] font-bold text-slate-500 uppercase tracking-widest px-4 py-3 w-24">Acciones</th>
               </tr>
             </thead>
@@ -383,7 +380,7 @@ export function RosterTab({
               {players.some((p) => p.removedAt) && (
                 <>
                   <tr className="bg-slate-50">
-                    <td colSpan={11} className="px-4 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                    <td colSpan={8} className="px-4 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-widest">
                       Dados de baja · no cuentan para el mínimo ni pueden recibir nuevos goles
                     </td>
                   </tr>
@@ -456,11 +453,6 @@ function PlayerRow({
 
   const yellows = playerStats?.yellowCards ?? 0
   const reds = playerStats?.redCards ?? 0
-  const walkovers = 0 // Not tracked in player_stats yet
-  const finesCount = 0 // Would need fines query per player
-  const statusMeta = (reds > 0)
-    ? { label: 'Suspendido', bg: 'bg-red-50 border-red-200', text: 'text-red-700', dot: 'bg-red-500' }
-    : { label: 'Activo', bg: 'bg-green-50 border-green-200', text: 'text-green-700', dot: 'bg-green-500' }
 
   return (
     <tr className={clsx(
@@ -523,27 +515,6 @@ function PlayerRow({
       {/* Rojas */}
       <td className="px-4 py-3 text-center">
         <StatCell value={reds} tone="red" />
-      </td>
-
-      {/* WO */}
-      <td className="px-4 py-3 text-center">
-        <StatCell value={walkovers} />
-      </td>
-
-      {/* Multas */}
-      <td className="px-4 py-3 text-center">
-        <StatCell value={finesCount} tone={finesCount > 0 ? 'amber' : 'default'} />
-      </td>
-
-      {/* Estado */}
-      <td className="px-4 py-3">
-        <span className={clsx(
-          'inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold border',
-          statusMeta.bg, statusMeta.text,
-        )}>
-          <span className={clsx('w-1.5 h-1.5 rounded-full', statusMeta.dot)} />
-          {statusMeta.label}
-        </span>
       </td>
 
       {/* Capitán */}

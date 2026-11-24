@@ -27,8 +27,8 @@ import { Field, inputCls } from '@/components/ui/form'
 // ─── Status helpers ──────────────────────────────────────────────────────────
 
 const STATUS_STYLE: Record<RegistrationStatus, { label: string; bg: string; text: string; dot: string }> = {
-  draft:     { label: 'Borrador',   bg: 'bg-slate-50 border-slate-200',  text: 'text-slate-600',  dot: 'bg-slate-400' },
-  pending:   { label: 'Pendiente',  bg: 'bg-amber-50 border-amber-200',  text: 'text-amber-700',  dot: 'bg-amber-500' },
+  draft:     { label: 'Sin enviar',   bg: 'bg-slate-50 border-slate-200',  text: 'text-slate-600',  dot: 'bg-slate-400' },
+  pending:   { label: 'Enviada',  bg: 'bg-amber-50 border-amber-200',  text: 'text-amber-700',  dot: 'bg-amber-500' },
   approved:  { label: 'Aprobado',   bg: 'bg-green-50 border-green-200',  text: 'text-green-700',  dot: 'bg-green-500' },
   rejected:  { label: 'Rechazado',  bg: 'bg-red-50 border-red-200',      text: 'text-red-700',    dot: 'bg-red-500' },
   withdrawn: { label: 'Retirado',   bg: 'bg-slate-50 border-slate-200',  text: 'text-slate-500',  dot: 'bg-slate-400' },
@@ -241,7 +241,8 @@ export function EquiposManager({
         {/* Status filters */}
         <div className="flex items-center gap-2 overflow-x-auto">
           <FilterChip label={`Todos (${counts.all})`}    active={filter === 'all'}       onClick={() => setFilter('all')} />
-          <FilterChip label={`Pendientes (${counts.pending})`}   active={filter === 'pending'}   onClick={() => setFilter('pending')} />
+          <FilterChip label={`Sin enviar (${counts.draft})`}     active={filter === 'draft'}     onClick={() => setFilter('draft')} />
+          <FilterChip label={`Enviadas por revisar (${counts.pending})`} active={filter === 'pending'} onClick={() => setFilter('pending')} />
           <FilterChip label={`Aprobados (${counts.approved})`}   active={filter === 'approved'}  onClick={() => setFilter('approved')} />
           <FilterChip label={`Rechazados (${counts.rejected})`}  active={filter === 'rejected'}  onClick={() => setFilter('rejected')} />
           <FilterChip label={`Retirados (${counts.withdrawn})`}  active={filter === 'withdrawn'} onClick={() => setFilter('withdrawn')} />
@@ -271,7 +272,8 @@ export function EquiposManager({
               <tr>
                 <th className="text-left text-[10px] font-bold text-slate-500 uppercase tracking-widest px-5 py-3">Equipo</th>
                 <th className="text-left text-[10px] font-bold text-slate-500 uppercase tracking-widest px-5 py-3">Plantilla</th>
-                <th className="text-left text-[10px] font-bold text-slate-500 uppercase tracking-widest px-5 py-3">Estado</th>
+                <th className="text-left text-[10px] font-bold text-slate-500 uppercase tracking-widest px-5 py-3">Nómina</th>
+                <th className="text-left text-[10px] font-bold text-slate-500 uppercase tracking-widest px-5 py-3">Inscripción</th>
                 <th className="text-left text-[10px] font-bold text-slate-500 uppercase tracking-widest px-5 py-3">Pago</th>
                 <th className="text-left text-[10px] font-bold text-slate-500 uppercase tracking-widest px-5 py-3">Grupo</th>
                 <th className="text-right text-[10px] font-bold text-slate-500 uppercase tracking-widest px-5 py-3">Acciones</th>
@@ -372,25 +374,6 @@ function RegistrationRow({
           <div className="min-w-0">
             <p className="text-sm font-semibold text-slate-900 truncate hover:text-green-700 transition-colors">
               {reg.team.name}
-              {/* El cierre general manda: si está activo, la nómina está cerrada
-                  aunque el candado del equipo esté abierto. */}
-              {(reg.rosterLocked ?? rostersLockedGlobally) ? (
-                <span
-                  className="ml-1.5 inline-flex items-center align-middle text-amber-600"
-                  title={reg.rosterLocked === true
-                    ? 'Nómina cerrada solo para este equipo'
-                    : 'Nóminas cerradas en todo el campeonato'}
-                >
-                  <Lock size={11} />
-                </span>
-              ) : reg.rosterLocked === false && rostersLockedGlobally ? (
-                <span
-                  className="ml-1.5 inline-flex items-center align-middle text-green-600"
-                  title="Excepción: nómina abierta pese al cierre general"
-                >
-                  <Unlock size={11} />
-                </span>
-              ) : null}
             </p>
             <p className="text-xs text-slate-400 truncate">
               {reg.team.shortName ?? reg.team.city ?? '—'}
@@ -433,6 +416,22 @@ function RegistrationRow({
             )}
           </div>
         )}
+      </td>
+
+      {/* Nómina: abierta o cerrada (independiente de si ya la enviaron) */}
+      <td className="px-5 py-3">
+        <RosterLockBadge
+          teamLocked={reg.rosterLocked}
+          lockedGlobally={rostersLockedGlobally}
+          busy={busy}
+          onToggle={() => run(() => onSetRoster(
+            // Cerrada -> abrir solo a este equipo; abierta -> cerrar solo este equipo.
+            // Si el valor coincide con el del campeonato, se vuelve a heredar.
+            (reg.rosterLocked ?? rostersLockedGlobally)
+              ? (rostersLockedGlobally ? false : null)
+              : (rostersLockedGlobally ? null : true),
+          ))}
+        />
       </td>
 
       {/* Status */}
@@ -504,10 +503,10 @@ function RegistrationRow({
           )}
           <RowMenu open={menuOpen} onOpenChange={setMenuOpen}>
             {reg.status === 'draft' && (
-              <div className="px-3 py-2 text-[11px] text-slate-400 italic">Esperando que el equipo envíe su plantilla</div>
+              <div className="px-3 py-2 text-[11px] text-slate-400 italic max-w-[220px]">El delegado aún no envía la nómina desde la app. Igual puede seguir agregando jugadores.</div>
             )}
             {reg.status !== 'pending' && reg.status !== 'draft' && (
-              <MenuItem onClick={() => run(() => onPatch({ status: 'pending' }))}>Volver a pendiente</MenuItem>
+              <MenuItem onClick={() => run(() => onPatch({ status: 'pending' }))}>Volver a enviada (por revisar)</MenuItem>
             )}
             {reg.status !== 'approved' && reg.status !== 'draft' && (
               <MenuItem onClick={() => run(() => onPatch({ status: 'approved' }))}>Aprobar</MenuItem>
@@ -537,16 +536,16 @@ function RegistrationRow({
             {reg.rosterLocked === null ? (
               rostersLockedGlobally ? (
                 <MenuItem onClick={() => run(() => onSetRoster(false))}>
-                  <Unlock size={12} /> Abrir nómina solo a este equipo
+                  <Unlock size={12} /> Abrir la nómina de este equipo
                 </MenuItem>
               ) : (
                 <MenuItem onClick={() => run(() => onSetRoster(true))}>
-                  <Lock size={12} /> Cerrar nómina
+                  <Lock size={12} /> Cerrar la nómina de este equipo
                 </MenuItem>
               )
             ) : (
               <MenuItem onClick={() => run(() => onSetRoster(null))}>
-                <RotateCcw size={12} /> Quitar excepción (seguir al campeonato)
+                <RotateCcw size={12} /> {rostersLockedGlobally ? 'Volver a cerrarla (como todo el campeonato)' : 'Volver a abrirla (como todo el campeonato)'}
               </MenuItem>
             )}
             <MenuItem danger onClick={() => run(onDelete)}>Quitar inscripción</MenuItem>
@@ -964,4 +963,44 @@ function extractError(err: unknown): string | null {
   const msg = maybeAxios.response?.data?.message
   if (!msg) return null
   return Array.isArray(msg) ? msg[0] ?? null : msg
+}
+
+// ─── Nómina abierta / cerrada ───────────────────────────────────────────────
+
+/**
+ * Estado de la nómina con texto, no solo un candado. "Abierta" = el delegado puede
+ * agregar, quitar y editar jugadores desde la app, aunque ya la haya enviado.
+ * El candado del equipo (true/false) manda sobre el del campeonato; null hereda.
+ */
+function RosterLockBadge({
+  teamLocked, lockedGlobally, busy, onToggle,
+}: {
+  teamLocked: boolean | null
+  lockedGlobally: boolean
+  busy: boolean
+  onToggle: () => void
+}) {
+  const locked = teamLocked ?? lockedGlobally
+  const exception = teamLocked !== null && teamLocked !== lockedGlobally
+  const title = locked
+    ? (exception ? 'Cerrada solo para este equipo. Clic para abrirla.' : 'Nóminas cerradas en todo el campeonato. Clic para abrirla solo a este equipo.')
+    : (exception ? 'Abierta solo para este equipo (el campeonato está cerrado). Clic para cerrarla.' : 'El delegado puede agregar y editar jugadores. Clic para cerrarla.')
+  return (
+    <button
+      type="button"
+      disabled={busy}
+      onClick={onToggle}
+      title={title}
+      className={clsx(
+        'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold border transition-colors disabled:opacity-50',
+        locked
+          ? 'bg-amber-50 border-amber-200 text-amber-800 hover:bg-amber-100'
+          : 'bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100',
+      )}
+    >
+      {locked ? <Lock size={11} /> : <Unlock size={11} />}
+      {locked ? 'Cerrada' : 'Abierta'}
+      {exception && <span className="font-medium opacity-70">· solo este</span>}
+    </button>
+  )
 }
